@@ -1,7 +1,7 @@
 # ==========================================
 # 1. 前端構建階段 (Vue 3 + Vite + pnpm)
 # ==========================================
-FROM node:22-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 # 安裝 pnpm
