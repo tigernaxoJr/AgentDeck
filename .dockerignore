@@ -1,0 +1,11 @@
+**/.git
+**/.gitignore
+**/node_modules
+**/target
+**/.antigravity_out
+*.log
+*.db
+*.db-shm
+*.db-wal
+backend-rust/antigravity_tasks.db*
+frontend-vue/dist

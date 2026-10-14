@@ -1,0 +1,24 @@
+services:
+  antigravity-driver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: antigravity-driver:latest
+    container_name: antigravity-driver
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      # 掛載本機想要由 CLI 操作的代碼工作目錄至容器內的 /workspace
+      - .:/workspace
+      # SQLite 資料庫持久化目錄
+      - sqlite_data:/data
+    environment:
+      - ANTIGRAVITY_WORKSPACE=/workspace
+      - DATABASE_URL=sqlite:///data/antigravity_tasks.db
+      - ANTIGRAVITY_API_KEY=
+      # 如果主機環境有自訂 CLI binary 或路徑
+      - ANTIGRAVITY_CLI_BIN=agy
+
+volumes:
+  sqlite_data:

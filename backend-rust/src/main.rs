@@ -43,11 +43,13 @@ async fn main() {
     let app = create_router(app_state);
 
     // 5. 綁定連接埠並掛載 Graceful Shutdown 訊號監聽
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let ip = host.parse::<std::net::IpAddr>().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    let addr = SocketAddr::from((ip, port));
     println!("🚀 Antigravity Web-CLI Bridge 啟動於 http://{}", addr);
     println!("📂 允許的基準工作目錄: {:?}", base_workspace);
     println!("🗄️ 資料庫路徑: {}", db_url);
