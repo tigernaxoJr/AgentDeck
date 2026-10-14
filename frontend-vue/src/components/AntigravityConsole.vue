@@ -1,81 +1,104 @@
 <template>
   <div
-    class="flex h-screen w-screen bg-slate-950 text-slate-100 font-sans overflow-hidden"
+    class="flex h-screen w-screen bg-[#0b0f19] text-slate-100 font-sans overflow-hidden antialiased"
   >
     <!-- 左側欄：系統指標與任務佇列清單 -->
-    <aside class="w-80 border-r border-slate-800 bg-slate-900/60 flex flex-col">
+    <aside class="w-84 border-r border-slate-800/80 bg-[#0f172a]/70 backdrop-blur-md flex flex-col">
       <!-- 頂部標題與連線狀態 -->
       <div
-        class="p-4 border-b border-slate-800 flex items-center justify-between"
+        class="p-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/40"
       >
-        <div class="flex items-center gap-2">
-          <span class="h-2.5 w-2.5 rounded-full" :class="wsStatusColor"></span>
-          <h1 class="font-bold text-sm tracking-wide text-slate-200">
-            ANTIGRAVITY CONSOLE
-          </h1>
+        <div class="flex items-center gap-2.5">
+          <div class="relative flex items-center justify-center">
+            <span class="h-2.5 w-2.5 rounded-full" :class="wsStatusColor"></span>
+          </div>
+          <div>
+            <h1 class="font-bold text-xs tracking-wider uppercase text-slate-100 flex items-center gap-1.5">
+              <span>Antigravity</span>
+              <span class="text-[10px] px-1.5 py-0.2 font-mono font-medium rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">CLI Driver</span>
+            </h1>
+          </div>
         </div>
         <span
-          class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400"
+          class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-800/90 text-slate-300 border border-slate-700/50"
         >
           {{ store.metrics.runningTasks }}/{{ store.metrics.maxConcurrency }} 執行中
         </span>
       </div>
 
       <!-- API Key 設定列 -->
-      <div class="px-4 py-2 bg-slate-900/80 border-b border-slate-800/80 flex items-center gap-2">
+      <div class="px-3.5 py-2.5 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2">
         <span class="text-[11px] font-mono text-slate-400 shrink-0">🔑 Key:</span>
         <input
           v-model="store.apiKey"
           type="password"
-          placeholder="可選 API Key..."
-          class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+          placeholder="可選 API Token..."
+          class="w-full bg-slate-950/80 border border-slate-800/80 rounded px-2.5 py-1 text-[11px] font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-colors"
         />
       </div>
 
       <!-- 佇列負載提示列 -->
       <div
-        class="px-4 py-2 bg-slate-900 border-b border-slate-800/80 flex justify-between text-xs text-slate-400"
+        class="px-4 py-2 bg-slate-900/40 border-b border-slate-800/60 flex justify-between items-center text-xs text-slate-400"
       >
-        <span>排隊等待中 (Queued)</span>
+        <span class="flex items-center gap-1.5">
+          <span class="h-1.5 w-1.5 rounded-full bg-amber-400/80"></span>
+          <span>排隊等待中 (Queued)</span>
+        </span>
         <span class="font-mono font-semibold text-amber-400">{{
           store.metrics.queuedTasks
         }}</span>
       </div>
 
       <!-- 任務歷史與排程清單 -->
-      <div class="flex-1 overflow-y-auto divide-y divide-slate-800/60">
+      <div class="flex-1 overflow-y-auto divide-y divide-slate-800/40">
         <button
           v-for="task in store.taskList"
           :key="task.taskId"
           @click="store.selectTask(task.taskId)"
-          class="w-full text-left p-3.5 transition-colors hover:bg-slate-800/50 flex flex-col gap-1.5 cursor-pointer"
+          class="w-full text-left p-3.5 transition-all hover:bg-slate-800/40 flex flex-col gap-1.5 cursor-pointer relative group"
           :class="{
-            'bg-slate-800/90 border-l-2 border-indigo-500':
+            'bg-slate-800/70 border-l-2 border-indigo-500':
               store.activeTaskId === task.taskId,
           }"
         >
           <div class="flex items-center justify-between">
             <span
-              class="text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded"
+              class="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded tracking-wide uppercase"
               :class="stateBadgeClass(task.state)"
             >
               {{ task.state }}
             </span>
-            <span class="text-[11px] font-mono text-slate-500">
+            <span class="text-[10px] font-mono text-slate-500">
               {{ formatTime(task.createdAt) }}
             </span>
           </div>
-          <p class="text-xs text-slate-200 line-clamp-2 font-medium break-all">
+
+          <p class="text-xs text-slate-200 line-clamp-2 font-medium break-all leading-snug">
             {{ task.prompt }}
           </p>
-          <span class="text-[11px] font-mono text-slate-500 truncate">
-            📁 {{ task.workspacePath }}
-          </span>
+
+          <div class="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-0.5">
+            <span class="truncate max-w-[130px] flex items-center gap-1 text-slate-400" :title="task.workspacePath">
+              📁 {{ task.workspacePath }}
+            </span>
+            <span v-if="task.model" class="truncate max-w-[110px] px-1 rounded bg-slate-800/60 text-slate-400 text-[10px]" :title="task.model">
+              {{ task.model.replace('-flash-', '-f-').replace('-medium', '-med') }}
+            </span>
+          </div>
+
+          <!-- Token Usage 徽章 (若已計算) -->
+          <div v-if="task.usage && task.usage.totalTokens > 0" class="flex items-center gap-2 pt-0.5 text-[10px] font-mono text-slate-400">
+            <span class="text-indigo-400 font-medium">⚡ {{ task.usage.totalTokens.toLocaleString() }} tokens</span>
+            <span class="text-slate-600">|</span>
+            <span class="text-slate-500">In: {{ task.usage.inputTokens.toLocaleString() }}</span>
+            <span class="text-slate-500">Out: {{ task.usage.outputTokens.toLocaleString() }}</span>
+          </div>
         </button>
 
         <div
           v-if="store.taskList.length === 0"
-          class="p-8 text-center text-xs text-slate-500"
+          class="p-10 text-center text-xs text-slate-500"
         >
           尚無任何執行任務
         </div>
@@ -83,45 +106,79 @@
     </aside>
 
     <!-- 右側主工作區：指令輸入 + 終端機 / 結構化結果 / Git Diff 檢視器 -->
-    <main class="flex-1 flex flex-col min-w-0">
+    <main class="flex-1 flex flex-col min-w-0 bg-[#090d16]">
       <!-- 頂部：指令派發表單 -->
       <section
-        class="p-4 bg-slate-900/40 border-b border-slate-800 flex flex-col gap-3"
+        class="p-4 bg-slate-900/60 border-b border-slate-800/80 flex flex-col gap-3 shadow-sm"
       >
-        <div class="flex gap-3">
+        <div class="flex flex-wrap gap-3 items-end">
+          <!-- Model 選擇器 -->
           <div class="w-64">
-            <label class="block text-[11px] font-mono text-slate-400 mb-1"
-              >目標工作目錄 (Workspace)</label
+            <label class="block text-[11px] font-mono font-medium text-slate-400 mb-1 flex items-center justify-between">
+              <span>執行模型 (Model)</span>
+              <button
+                type="button"
+                @click="store.fetchModels"
+                :disabled="store.isModelsLoading"
+                class="text-[10px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                title="重新整理模型清單"
+              >
+                {{ store.isModelsLoading ? '載入中...' : '↻ 整理' }}
+              </button>
+            </label>
+            <select
+              v-model="form.model"
+              class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
+            >
+              <option value="">預設模型 (CLI Default)</option>
+              <option
+                v-for="m in store.availableModels"
+                :key="m.id"
+                :value="m.id"
+              >
+                {{ m.name }} ({{ m.id }})
+              </option>
+            </select>
+          </div>
+
+          <!-- 目標工作目錄 -->
+          <div class="w-48">
+            <label class="block text-[11px] font-mono font-medium text-slate-400 mb-1"
+              >工作目錄 (Workspace)</label
             >
             <input
               v-model="form.workspacePath"
               type="text"
               placeholder="例如: ."
-              class="w-full bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+              class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors"
             />
           </div>
-          <div class="w-32">
-            <label class="block text-[11px] font-mono text-slate-400 mb-1"
-              >超時限制 (秒)</label
+
+          <!-- 超時限制 -->
+          <div class="w-28">
+            <label class="block text-[11px] font-mono font-medium text-slate-400 mb-1"
+              >超時 (秒)</label
             >
             <input
               v-model.number="form.timeoutSecs"
               type="number"
               min="30"
               max="3600"
-              class="w-full bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+              class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors"
             />
           </div>
-          <div class="flex items-end pb-1">
+
+          <!-- 勾選結構化摘要 -->
+          <div class="flex items-center pb-2">
             <label
-              class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none"
+              class="flex items-center gap-2 text-xs text-slate-300 hover:text-white cursor-pointer select-none"
             >
               <input
                 v-model="form.requireJsonSummary"
                 type="checkbox"
-                class="rounded bg-slate-950 border-slate-700 text-indigo-600 focus:ring-0"
+                class="rounded bg-slate-950 border-slate-800 text-indigo-600 focus:ring-0"
               />
-              <span>要求產出結構化 JSON 摘要</span>
+              <span>要求結構化 JSON</span>
             </label>
           </div>
         </div>
@@ -130,14 +187,14 @@
           <textarea
             v-model="form.prompt"
             rows="2"
-            placeholder="輸入要交給 Antigravity CLI 執行的任務指令 (Ctrl + Enter 發送)..."
+            placeholder="輸入要交給 Antigravity CLI (agy) 執行的指令或 Prompt (Ctrl + Enter 發送)..."
             @keydown.ctrl.enter.prevent="submitTask"
-            class="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+            class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500/80 resize-none transition-colors"
           ></textarea>
           <button
             @click="submitTask"
             :disabled="isSubmitting || !form.prompt.trim()"
-            class="px-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-semibold text-xs rounded transition-colors flex items-center gap-2 shrink-0 cursor-pointer"
+            class="px-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium text-xs rounded-lg transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer shadow-lg shadow-indigo-600/20 active:scale-[0.98]"
           >
             <span>🚀 派發任務</span>
           </button>
@@ -146,7 +203,7 @@
         <!-- 錯誤提示橫幅 -->
         <div
           v-if="store.lastError"
-          class="px-3 py-2 rounded bg-rose-950/80 border border-rose-800 text-rose-200 text-xs font-mono flex justify-between items-center"
+          class="px-3 py-2 rounded-md bg-rose-950/80 border border-rose-800 text-rose-200 text-xs font-mono flex justify-between items-center"
         >
           <span>{{ store.lastError }}</span>
           <button
@@ -158,32 +215,32 @@
         </div>
       </section>
 
-      <!-- 中間控制列：分頁切換與中止按鈕 -->
+      <!-- 中間控制列：分頁切換、使用量儀表與中止按鈕 -->
       <header
-        class="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between"
+        class="px-4 py-2 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between"
       >
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5">
           <button
             @click="activeTab = 'terminal'"
-            class="px-3 py-1 text-xs font-medium rounded transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5"
             :class="
               activeTab === 'terminal'
-                ? 'bg-slate-800 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-slate-800 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             "
           >
-            🖥️ 即時終端機 (stdout / stderr)
+            <span>🖥️ 即時終端機</span>
           </button>
           <button
             @click="activeTab = 'artifact'"
-            class="px-3 py-1 text-xs font-medium rounded transition-colors flex items-center gap-1.5 cursor-pointer"
+            class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 cursor-pointer"
             :class="
               activeTab === 'artifact'
-                ? 'bg-slate-800 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-slate-800 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             "
           >
-            <span>📦 結構化產出 (Artifact)</span>
+            <span>📦 結構化產出</span>
             <span
               v-if="store.activeArtifact"
               class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
@@ -191,14 +248,14 @@
           </button>
           <button
             @click="openDiffTab"
-            class="px-3 py-1 text-xs font-medium rounded transition-colors flex items-center gap-1.5 cursor-pointer"
+            class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 cursor-pointer"
             :class="
               activeTab === 'diff'
-                ? 'bg-slate-800 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-slate-800 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             "
           >
-            <span>🔀 程式碼變更 (Git Diff)</span>
+            <span>🔀 程式碼變更</span>
             <span
               v-if="store.activeDiff?.changedFiles?.length"
               class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-indigo-500/30 text-indigo-300"
@@ -208,11 +265,36 @@
           </button>
         </div>
 
-        <!-- 當前任務操作與強制中止 -->
+        <!-- 當前任務：Model 與 Token 使用量即時指標 -->
         <div v-if="store.activeTask" class="flex items-center gap-3">
+          <!-- Token 使用量 -->
+          <div
+            v-if="store.activeTask.usage && store.activeTask.usage.totalTokens > 0"
+            class="hidden md:flex items-center gap-3 px-3 py-1 bg-slate-950/80 border border-slate-800/80 rounded-md text-[11px] font-mono"
+          >
+            <div class="flex items-center gap-1 text-slate-300">
+              <span class="text-indigo-400">⚡ 總計:</span>
+              <span class="font-semibold text-white">{{ store.activeTask.usage.totalTokens.toLocaleString() }}</span>
+            </div>
+            <span class="text-slate-700">|</span>
+            <div class="flex items-center gap-1 text-slate-400">
+              <span>輸入:</span>
+              <span class="text-slate-300">{{ store.activeTask.usage.inputTokens.toLocaleString() }}</span>
+            </div>
+            <div class="flex items-center gap-1 text-slate-400">
+              <span>輸出:</span>
+              <span class="text-slate-300">{{ store.activeTask.usage.outputTokens.toLocaleString() }}</span>
+            </div>
+            <div v-if="store.activeTask.usage.thinkingTokens > 0" class="flex items-center gap-1 text-slate-400">
+              <span>思考:</span>
+              <span class="text-purple-300">{{ store.activeTask.usage.thinkingTokens.toLocaleString() }}</span>
+            </div>
+          </div>
+
           <span class="text-xs font-mono text-slate-400">
-            Task ID: {{ store.activeTask.taskId.slice(0, 8) }}
+            ID: {{ store.activeTask.taskId.slice(0, 8) }}
           </span>
+
           <button
             v-if="
               store.activeTask.state === 'RUNNING' ||
@@ -221,7 +303,7 @@
             @click="store.abortTask(store.activeTask.taskId)"
             class="px-3 py-1 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/40 text-rose-300 hover:text-white text-xs font-semibold rounded transition-colors cursor-pointer"
           >
-            ⏹ 強制中止 (SIGKILL)
+            ⏹ 中止 (SIGKILL)
           </button>
         </div>
       </header>
@@ -305,6 +387,7 @@ const activeTab = ref<"terminal" | "artifact" | "diff">("terminal");
 const form = reactive({
   prompt: "",
   workspacePath: ".",
+  model: "",
   timeoutSecs: 600,
   requireJsonSummary: true,
 });
@@ -317,7 +400,10 @@ let renderedCount = 0;
 
 onMounted(async () => {
   initTerminal();
-  await store.fetchTasks();
+  await Promise.all([
+    store.fetchTasks(),
+    store.fetchModels(),
+  ]);
 });
 
 onBeforeUnmount(() => {
@@ -427,6 +513,7 @@ async function submitTask() {
     await store.createTask({
       prompt: form.prompt,
       workspacePath: form.workspacePath,
+      model: form.model.trim() || undefined,
       timeoutSecs: form.timeoutSecs,
       requireJsonSummary: form.requireJsonSummary,
     });

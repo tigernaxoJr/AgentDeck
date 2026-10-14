@@ -47,6 +47,7 @@ impl TaskRepository {
                 task_id TEXT PRIMARY KEY NOT NULL,
                 prompt TEXT NOT NULL,
                 workspace_path TEXT NOT NULL,
+                model TEXT,
                 state TEXT NOT NULL,
                 exit_code INTEGER,
                 created_at TEXT NOT NULL,
@@ -54,7 +55,12 @@ impl TaskRepository {
                 finished_at TEXT,
                 artifact_file_name TEXT,
                 artifact_type TEXT,
-                artifact_content TEXT
+                artifact_content TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                thinking_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                total_tokens INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
@@ -62,6 +68,15 @@ impl TaskRepository {
         )
         .execute(&self.pool)
         .await?;
+
+        // 確保升級相容：若舊表存在則嘗試新增欄位 (若已存在則忽略錯誤)
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN model TEXT").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN thinking_tokens INTEGER").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN cache_read_tokens INTEGER").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN total_tokens INTEGER").execute(&self.pool).await;
+
         Ok(())
     }
 
@@ -93,13 +108,14 @@ impl TaskRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO tasks (task_id, prompt, workspace_path, state, exit_code, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO tasks (task_id, prompt, workspace_path, model, state, exit_code, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )
         .bind(task.task_id.to_string())
         .bind(&task.prompt)
         .bind(&task.workspace_path)
+        .bind(&task.model)
         .bind(state_str)
         .bind(task.exit_code)
         .bind(task.created_at.to_rfc3339())
@@ -109,13 +125,14 @@ impl TaskRepository {
         Ok(())
     }
 
-    /// 更新任務狀態與時間戳
+    /// 更新任務狀態與時間戳及 Token 使用量
     pub async fn update_task_state(
         &self,
         task_id: Uuid,
         new_state: TaskState,
         exit_code: Option<i32>,
         timestamp: DateTime<Utc>,
+        usage: Option<&crate::models::protocol::TokenUsage>,
     ) -> Result<(), sqlx::Error> {
         let state_str = serde_json::to_value(new_state)
             .unwrap()
@@ -137,15 +154,38 @@ impl TaskRepository {
             | TaskState::Failed
             | TaskState::Cancelled
             | TaskState::Timeout => {
-                sqlx::query(
-                    "UPDATE tasks SET state = ?1, exit_code = ?2, finished_at = ?3 WHERE task_id = ?4",
-                )
-                .bind(state_str)
-                .bind(exit_code)
-                .bind(ts_str)
-                .bind(task_id.to_string())
-                .execute(&self.pool)
-                .await?;
+                if let Some(u) = usage {
+                    sqlx::query(
+                        r#"
+                        UPDATE tasks
+                        SET state = ?1, exit_code = ?2, finished_at = ?3,
+                            input_tokens = ?4, output_tokens = ?5, thinking_tokens = ?6,
+                            cache_read_tokens = ?7, total_tokens = ?8
+                        WHERE task_id = ?9
+                        "#,
+                    )
+                    .bind(state_str)
+                    .bind(exit_code)
+                    .bind(ts_str)
+                    .bind(u.input_tokens)
+                    .bind(u.output_tokens)
+                    .bind(u.thinking_tokens)
+                    .bind(u.cache_read_tokens)
+                    .bind(u.total_tokens)
+                    .bind(task_id.to_string())
+                    .execute(&self.pool)
+                    .await?;
+                } else {
+                    sqlx::query(
+                        "UPDATE tasks SET state = ?1, exit_code = ?2, finished_at = ?3 WHERE task_id = ?4",
+                    )
+                    .bind(state_str)
+                    .bind(exit_code)
+                    .bind(ts_str)
+                    .bind(task_id.to_string())
+                    .execute(&self.pool)
+                    .await?;
+                }
             }
             TaskState::Queued => {}
         }
@@ -188,7 +228,8 @@ impl TaskRepository {
     pub async fn get_task_by_id(&self, task_id: Uuid) -> Result<Option<TaskMetadata>, sqlx::Error> {
         let row_opt = sqlx::query(
             r#"
-            SELECT task_id, prompt, workspace_path, state, exit_code, created_at, started_at, finished_at
+            SELECT task_id, prompt, workspace_path, model, state, exit_code, created_at, started_at, finished_at,
+                   input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens
             FROM tasks
             WHERE task_id = ?1
             "#,
@@ -203,11 +244,22 @@ impl TaskRepository {
             let created_str: String = row.get("created_at");
             let started_str: Option<String> = row.get("started_at");
             let finished_str: Option<String> = row.get("finished_at");
+            let model: Option<String> = row.get("model");
+            let total_tokens: Option<i64> = row.get("total_tokens");
+
+            let usage = total_tokens.map(|tot| crate::models::protocol::TokenUsage {
+                input_tokens: row.get::<Option<i64>, _>("input_tokens").unwrap_or(0),
+                output_tokens: row.get::<Option<i64>, _>("output_tokens").unwrap_or(0),
+                thinking_tokens: row.get::<Option<i64>, _>("thinking_tokens").unwrap_or(0),
+                cache_read_tokens: row.get::<Option<i64>, _>("cache_read_tokens").unwrap_or(0),
+                total_tokens: tot,
+            });
 
             Ok(Some(TaskMetadata {
                 task_id: Uuid::parse_str(&id_str).unwrap_or_default(),
                 prompt: row.get("prompt"),
                 workspace_path: row.get("workspace_path"),
+                model,
                 state: serde_json::from_value(Value::String(state_str))
                     .unwrap_or(TaskState::Failed),
                 exit_code: row.get("exit_code"),
@@ -224,6 +276,7 @@ impl TaskRepository {
                         .ok()
                         .map(|dt| dt.with_timezone(&Utc))
                 }),
+                usage,
             }))
         } else {
             Ok(None)
@@ -234,7 +287,8 @@ impl TaskRepository {
     pub async fn list_recent_tasks(&self, limit: i64) -> Result<Vec<TaskMetadata>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT task_id, prompt, workspace_path, state, exit_code, created_at, started_at, finished_at
+            SELECT task_id, prompt, workspace_path, model, state, exit_code, created_at, started_at, finished_at,
+                   input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens
             FROM tasks
             ORDER BY created_at DESC
             LIMIT ?1
@@ -251,11 +305,22 @@ impl TaskRepository {
             let created_str: String = row.get("created_at");
             let started_str: Option<String> = row.get("started_at");
             let finished_str: Option<String> = row.get("finished_at");
+            let model: Option<String> = row.get("model");
+            let total_tokens: Option<i64> = row.get("total_tokens");
+
+            let usage = total_tokens.map(|tot| crate::models::protocol::TokenUsage {
+                input_tokens: row.get::<Option<i64>, _>("input_tokens").unwrap_or(0),
+                output_tokens: row.get::<Option<i64>, _>("output_tokens").unwrap_or(0),
+                thinking_tokens: row.get::<Option<i64>, _>("thinking_tokens").unwrap_or(0),
+                cache_read_tokens: row.get::<Option<i64>, _>("cache_read_tokens").unwrap_or(0),
+                total_tokens: tot,
+            });
 
             list.push(TaskMetadata {
                 task_id: Uuid::parse_str(&id_str).unwrap_or_default(),
                 prompt: row.get("prompt"),
                 workspace_path: row.get("workspace_path"),
+                model,
                 state: serde_json::from_value(Value::String(state_str))
                     .unwrap_or(TaskState::Failed),
                 exit_code: row.get("exit_code"),
@@ -272,6 +337,7 @@ impl TaskRepository {
                         .ok()
                         .map(|dt| dt.with_timezone(&Utc))
                 }),
+                usage,
             });
         }
         Ok(list)
@@ -288,10 +354,11 @@ impl TaskRepository {
                         new_state,
                         exit_code,
                         timestamp,
+                        usage,
                         ..
                     } => {
                         let _ = repo
-                            .update_task_state(task_id, new_state, exit_code, timestamp)
+                            .update_task_state(task_id, new_state, exit_code, timestamp, usage.as_ref())
                             .await;
                     }
                     ServerEvent::ArtifactReady { task_id, artifact } => {

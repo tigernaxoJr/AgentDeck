@@ -54,6 +54,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tasks/{id}/diff", get(get_task_diff_handler))
         .route("/tasks/{id}/diff/revert", post(revert_file_handler))
         .route("/tasks/{id}/diff/commit", post(commit_changes_handler))
+        .route("/models", get(list_models_handler))
         .route("/ws", get(ws_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -274,4 +275,46 @@ async fn is_file_untracked(work_dir: &std::path::Path, file_path: &str) -> bool 
     } else {
         false
     }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+}
+
+/// GET /api/models - 取得 CLI 支援的模型清單
+async fn list_models_handler() -> Result<Json<Vec<ModelInfo>>, (StatusCode, String)> {
+    let bin_name = std::env::var("ANTIGRAVITY_CLI_BIN").unwrap_or_else(|_| "agy".to_string());
+    let output = Command::new(&bin_name)
+        .arg("models")
+        .output()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("執行 {} models 失敗: {}", bin_name, e)))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let mut models = Vec::new();
+
+    for line in stdout_str.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("Fetching") || trimmed.starts_with("Available") {
+            continue;
+        }
+        // 解析格式例如 "gemini-3.8-flash-high\tGemini 3.8 Flash (High)" 或空白分隔
+        let parts: Vec<&str> = trimmed.splitn(2, |c| c == '\t' || c == ' ').collect();
+        if !parts.is_empty() {
+            let id = parts[0].trim().to_string();
+            let name = if parts.len() > 1 && !parts[1].trim().is_empty() {
+                parts[1].trim().to_string()
+            } else {
+                id.clone()
+            };
+            if !id.is_empty() {
+                models.push(ModelInfo { id, name });
+            }
+        }
+    }
+
+    Ok(Json(models))
 }

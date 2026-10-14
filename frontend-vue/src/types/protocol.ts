@@ -14,6 +14,19 @@ export type StreamChannel = "stdout" | "stderr" | "system";
 
 export type ArtifactType = "json" | "markdown" | "diff" | "plaintext";
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+}
+
 // ==========================================
 // 2. REST API 請求與回應介面 (HTTP Interfaces)
 // ==========================================
@@ -21,6 +34,7 @@ export type ArtifactType = "json" | "markdown" | "diff" | "plaintext";
 export interface CreateTaskRequest {
   prompt: string;
   workspacePath: string;
+  model?: string;
   timeoutSecs?: number;
   extraFlags?: string[];
   requireJsonSummary?: boolean;
@@ -30,11 +44,13 @@ export interface TaskMetadata {
   taskId: string;
   prompt: string;
   workspacePath: string;
+  model?: string;
   state: TaskState;
   exitCode: number | null;
   createdAt: string; // ISO 8601 UTC String
   startedAt: string | null;
   finishedAt: string | null;
+  usage?: TokenUsage | null;
 }
 
 // ==========================================
@@ -63,6 +79,7 @@ export interface TaskStateChangedPayload {
   newState: TaskState;
   exitCode: number | null;
   timestamp: string;
+  usage?: TokenUsage | null;
 }
 
 export interface StreamBatchPayload {

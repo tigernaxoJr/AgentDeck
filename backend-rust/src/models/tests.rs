@@ -23,6 +23,7 @@ mod tests {
             new_state: TaskState::Running,
             exit_code: None,
             timestamp: Utc::now(),
+            usage: None,
         };
 
         let json = serde_json::to_string(&event).unwrap();

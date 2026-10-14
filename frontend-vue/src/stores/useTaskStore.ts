@@ -10,6 +10,7 @@ import type {
   ArtifactData,
   SystemMetricsPayload,
   GitDiffReport,
+  ModelInfo,
 } from "@/types/protocol";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
@@ -27,6 +28,9 @@ export const useTaskStore = defineStore("taskStore", () => {
   const artifactsByTask = ref<Map<string, ArtifactData>>(new Map());
   const diffsByTask = ref<Map<string, GitDiffReport>>(new Map());
   const isDiffLoading = ref<boolean>(false);
+
+  const availableModels = ref<ModelInfo[]>([]);
+  const isModelsLoading = ref<boolean>(false);
 
   const activeTaskId = ref<string | null>(null);
   const lastError = ref<string | null>(null);
@@ -115,7 +119,7 @@ export const useTaskStore = defineStore("taskStore", () => {
   function handleServerEvent(event: ServerEvent) {
     switch (event.type) {
       case "TASK_STATE_CHANGED": {
-        const { taskId, newState, exitCode, timestamp } = event.payload;
+        const { taskId, newState, exitCode, timestamp, usage } = event.payload;
         const existing = tasks.value.get(taskId);
         if (existing) {
           existing.state = newState;
@@ -125,6 +129,9 @@ export const useTaskStore = defineStore("taskStore", () => {
             ["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT"].includes(newState)
           ) {
             existing.finishedAt = timestamp;
+          }
+          if (usage) {
+            existing.usage = usage;
           }
           tasks.value.set(taskId, { ...existing });
         } else {
@@ -311,6 +318,22 @@ export const useTaskStore = defineStore("taskStore", () => {
     await fetchTaskDiff(taskId);
   }
 
+  /** 查詢 CLI 支援的模型清單 */
+  async function fetchModels() {
+    isModelsLoading.value = true;
+    try {
+      const res = await authFetch("/api/models");
+      if (res.ok) {
+        const list = (await res.json()) as ModelInfo[];
+        availableModels.value = list;
+      }
+    } catch (err) {
+      console.warn("fetchModels error:", err);
+    } finally {
+      isModelsLoading.value = false;
+    }
+  }
+
   return {
     apiKey,
     isAuthError,
@@ -323,9 +346,12 @@ export const useTaskStore = defineStore("taskStore", () => {
     activeArtifact,
     activeDiff,
     isDiffLoading,
+    availableModels,
+    isModelsLoading,
     metrics,
     lastError,
     fetchTasks,
+    fetchModels,
     createTask,
     selectTask,
     abortTask,

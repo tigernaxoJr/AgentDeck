@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::models::protocol::{
     ArtifactData, ArtifactType, CreateTaskRequest, LogEntry, ServerEvent, StreamChannel, TaskState,
+    TokenUsage,
 };
 
 const SUMMARY_REL_PATH: &str = ".antigravity_out/summary.json";
@@ -57,7 +59,16 @@ impl TaskRunner {
         let mut cmd = Command::new(&bin_name);
         cmd.current_dir(&work_dir)
             .arg("--dangerously-skip-permissions")
-            .args(&self.req.extra_flags)
+            .arg("--output-format")
+            .arg("stream-json");
+
+        if let Some(ref m) = self.req.model {
+            if !m.trim().is_empty() {
+                cmd.arg("--model").arg(m.trim());
+            }
+        }
+
+        cmd.args(&self.req.extra_flags)
             .arg("-p")
             .arg(&final_prompt)
             .stdin(Stdio::null()) // 切斷標準輸入，防止 Zombie Process
@@ -92,13 +103,41 @@ impl TaskRunner {
             self.event_tx.clone(),
         ));
 
+        // 捕獲 Token Usage
+        let captured_usage = Arc::new(std::sync::Mutex::new(None::<TokenUsage>));
+        let captured_usage_clone = captured_usage.clone();
+
         // 分別啟動 stdout 與 stderr 的讀取 Task
         let tx_out = log_tx.clone();
         let stdout_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if tx_out.send((StreamChannel::Stdout, line)).await.is_err() {
-                    break;
+                // 解析 stream-json NDJSON
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                    // 1. 捕捉 usage 資訊
+                    let usage_val = val.pointer("/result/usage")
+                        .or_else(|| val.pointer("/step_update/usage"))
+                        .or_else(|| val.get("usage"));
+                    if let Some(u) = usage_val {
+                        if let Ok(parsed) = serde_json::from_value::<TokenUsage>(u.clone()) {
+                            if let Ok(mut lock) = captured_usage_clone.lock() {
+                                *lock = Some(parsed);
+                            }
+                        }
+                    }
+
+                    // 2. 轉換 text_delta 為乾淨的終端文字輸出
+                    if let Some(delta) = val.pointer("/step_update/text_delta").and_then(|v| v.as_str()) {
+                        let _ = tx_out.send((StreamChannel::Stdout, delta.to_string())).await;
+                    } else if let Some(resp) = val.pointer("/result/response").and_then(|v| v.as_str()) {
+                        // 若無 step_update 串流則輸出完整結果
+                        let _ = tx_out.send((StreamChannel::Stdout, resp.to_string())).await;
+                    }
+                } else {
+                    // 非 JSON 格式時按原樣輸出
+                    if tx_out.send((StreamChannel::Stdout, line)).await.is_err() {
+                        break;
+                    }
                 }
             }
         });
@@ -168,6 +207,8 @@ impl TaskRunner {
             });
         }
 
+        let token_usage = captured_usage.lock().ok().and_then(|mut guard| guard.take());
+
         // 8. 廣播最終狀態轉換
         let _ = self.event_tx.send(ServerEvent::TaskStateChanged {
             task_id: self.task_id,
@@ -175,6 +216,7 @@ impl TaskRunner {
             new_state: final_state,
             exit_code,
             timestamp: Utc::now(),
+            usage: token_usage,
         });
 
         final_state

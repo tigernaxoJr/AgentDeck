@@ -69,11 +69,13 @@ impl TaskScheduler {
             task_id,
             prompt: req.prompt.clone(),
             workspace_path: req.workspace_path.clone(),
+            model: req.model.clone(),
             state: TaskState::Queued,
             exit_code: None,
             created_at: now,
             started_at: None,
             finished_at: None,
+            usage: None,
         };
 
         // 註冊中止通道
@@ -88,6 +90,7 @@ impl TaskScheduler {
             new_state: TaskState::Queued,
             exit_code: None,
             timestamp: now,
+            usage: None,
         });
         self.broadcast_metrics();
 
@@ -119,6 +122,7 @@ impl TaskScheduler {
                         new_state: TaskState::Cancelled,
                         exit_code: None,
                         timestamp: Utc::now(),
+                        usage: None,
                     });
                     if running.load(Ordering::Relaxed) == 0 && queued.load(Ordering::Relaxed) == 0 {
                         drain_notify.notify_waiters();
@@ -138,6 +142,7 @@ impl TaskScheduler {
                 new_state: TaskState::Running,
                 exit_code: None,
                 timestamp: Utc::now(),
+                usage: None,
             });
 
             // 階段 3：交由 TaskRunner 啟動 CLI 子行程並監控 I/O

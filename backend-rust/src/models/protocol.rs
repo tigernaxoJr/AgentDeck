@@ -45,6 +45,8 @@ pub enum ArtifactType {
 pub struct CreateTaskRequest {
     pub prompt: String,
     pub workspace_path: String,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
     #[serde(default)]
@@ -61,6 +63,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Token 使用量統計
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    #[serde(alias = "input_tokens", rename(serialize = "inputTokens"))]
+    pub input_tokens: i64,
+    #[serde(alias = "output_tokens", rename(serialize = "outputTokens"))]
+    pub output_tokens: i64,
+    #[serde(alias = "thinking_tokens", rename(serialize = "thinkingTokens"))]
+    pub thinking_tokens: i64,
+    #[serde(alias = "cache_read_tokens", rename(serialize = "cacheReadTokens"))]
+    pub cache_read_tokens: i64,
+    #[serde(alias = "total_tokens", rename(serialize = "totalTokens"))]
+    pub total_tokens: i64,
+}
+
 /// 任務完整資訊（用於 GET /api/tasks 與清單渲染）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,11 +85,15 @@ pub struct TaskMetadata {
     pub task_id: Uuid,
     pub prompt: String,
     pub workspace_path: String,
+    #[serde(default)]
+    pub model: Option<String>,
     pub state: TaskState,
     pub exit_code: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
 }
 
 // ==========================================
@@ -111,6 +132,8 @@ pub enum ServerEvent {
         new_state: TaskState,
         exit_code: Option<i32>,
         timestamp: DateTime<Utc>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
 
     /// 批次終端機輸出（50ms Throttling Batch）
