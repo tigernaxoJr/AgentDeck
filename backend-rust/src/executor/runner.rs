@@ -56,11 +56,9 @@ impl TaskRunner {
 
         let mut cmd = Command::new(&bin_name);
         cmd.current_dir(&work_dir)
-            .arg("run")
-            .arg("--no-interactive") // 強制 Headless 模式，避免等待輸入卡死
-            .arg("--yes")
+            .arg("--dangerously-skip-permissions")
             .args(&self.req.extra_flags)
-            .arg("--prompt")
+            .arg("-p")
             .arg(&final_prompt)
             .stdin(Stdio::null()) // 切斷標準輸入，防止 Zombie Process
             .stdout(Stdio::piped())
