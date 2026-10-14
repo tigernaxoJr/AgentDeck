@@ -42,7 +42,7 @@ BACKEND_PID=$!
 # 3. 啟動前端 (Vue 3 + Vite)
 echo "🎨 [2/2] 正在啟動前端服務 (Vue 3 Vite on :5173)..."
 cd "$ROOT_DIR/frontend-vue"
-npm run dev &
+pnpm run dev &
 FRONTEND_PID=$!
 
 echo "=================================================="

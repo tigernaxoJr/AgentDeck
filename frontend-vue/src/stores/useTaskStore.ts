@@ -11,6 +11,7 @@ import type {
   SystemMetricsPayload,
   GitDiffReport,
   ModelInfo,
+  WorkspaceInfo,
 } from "@/types/protocol";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
@@ -31,6 +32,9 @@ export const useTaskStore = defineStore("taskStore", () => {
 
   const availableModels = ref<ModelInfo[]>([]);
   const isModelsLoading = ref<boolean>(false);
+
+  const availableWorkspaces = ref<WorkspaceInfo[]>([]);
+  const isWorkspacesLoading = ref<boolean>(false);
 
   const activeTaskId = ref<string | null>(null);
   const lastError = ref<string | null>(null);
@@ -334,6 +338,22 @@ export const useTaskStore = defineStore("taskStore", () => {
     }
   }
 
+  /** 查詢可用工作目錄清單 */
+  async function fetchWorkspaces() {
+    isWorkspacesLoading.value = true;
+    try {
+      const res = await authFetch("/api/workspaces");
+      if (res.ok) {
+        const list = (await res.json()) as WorkspaceInfo[];
+        availableWorkspaces.value = list;
+      }
+    } catch (err) {
+      console.warn("fetchWorkspaces error:", err);
+    } finally {
+      isWorkspacesLoading.value = false;
+    }
+  }
+
   return {
     apiKey,
     isAuthError,
@@ -348,10 +368,13 @@ export const useTaskStore = defineStore("taskStore", () => {
     isDiffLoading,
     availableModels,
     isModelsLoading,
+    availableWorkspaces,
+    isWorkspacesLoading,
     metrics,
     lastError,
     fetchTasks,
     fetchModels,
+    fetchWorkspaces,
     createTask,
     selectTask,
     abortTask,

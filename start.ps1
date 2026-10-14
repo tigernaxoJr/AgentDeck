@@ -21,7 +21,7 @@ Write-Host "🎨 [2/2] 正在啟動前端服務 (Vue 3 Vite on :5173)..." -Foreg
 $FrontendJob = Start-Job -ScriptBlock {
     param($Dir)
     Set-Location "$Dir\frontend-vue"
-    npm run dev
+    pnpm run dev
 } -ArgumentList $RootDir
 
 Write-Host "==================================================" -ForegroundColor Green

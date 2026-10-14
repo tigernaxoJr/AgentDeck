@@ -27,6 +27,11 @@ export interface ModelInfo {
   name: string;
 }
 
+export interface WorkspaceInfo {
+  path: string;
+  name: string;
+}
+
 // ==========================================
 // 2. REST API 請求與回應介面 (HTTP Interfaces)
 // ==========================================

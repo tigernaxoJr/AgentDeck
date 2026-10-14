@@ -55,6 +55,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tasks/{id}/diff/revert", post(revert_file_handler))
         .route("/tasks/{id}/diff/commit", post(commit_changes_handler))
         .route("/models", get(list_models_handler))
+        .route("/workspaces", get(list_workspaces_handler))
         .route("/ws", get(ws_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -317,4 +318,62 @@ async fn list_models_handler() -> Result<Json<Vec<ModelInfo>>, (StatusCode, Stri
     }
 
     Ok(Json(models))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub path: String,
+    pub name: String,
+}
+
+/// GET /api/workspaces - 取得目前主專案與常見工作目錄清單供下拉選取
+async fn list_workspaces_handler() -> Result<Json<Vec<WorkspaceInfo>>, (StatusCode, String)> {
+    let mut workspaces = Vec::new();
+
+    // 1. 當前專案根目錄
+    if let Ok(current_dir) = std::env::current_dir() {
+        let path_str = current_dir.to_string_lossy().to_string();
+        let name = current_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Current Directory".to_string());
+        workspaces.push(WorkspaceInfo {
+            path: path_str,
+            name: format!("[專案根目錄] {}", name),
+        });
+
+        // 2. 當前專案的主要子模組目錄
+        for sub in &["backend-rust", "frontend-vue"] {
+            let sub_path = current_dir.join(sub);
+            if sub_path.is_dir() {
+                workspaces.push(WorkspaceInfo {
+                    path: sub_path.to_string_lossy().to_string(),
+                    name: format!("[子目錄] {}", sub),
+                });
+            }
+        }
+
+        // 3. 掃描同層或上一層 workspace 目錄（如果有）
+        if let Some(parent) = current_dir.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && path != current_dir {
+                        if let Some(file_name) = path.file_name() {
+                            let name_str = file_name.to_string_lossy().to_string();
+                            if !name_str.starts_with('.') {
+                                workspaces.push(WorkspaceInfo {
+                                    path: path.to_string_lossy().to_string(),
+                                    name: name_str,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(workspaces))
 }
