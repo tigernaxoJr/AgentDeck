@@ -1,0 +1,34 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Antigravity CLI artifacts
+.antigravity_out/
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
