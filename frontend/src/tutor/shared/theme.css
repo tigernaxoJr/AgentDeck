@@ -1,0 +1,23 @@
+:root {
+  --tutor-bg: #faf6f0;
+  --tutor-card-bg: #ffffff;
+  --tutor-text: #2c2523;
+  --tutor-muted: #796f6a;
+  --tutor-accent: #e06d43;
+  --tutor-accent-hover: #c9562c;
+  --tutor-border: #e8ded4;
+  --tutor-callout: #fef3c7;
+  --tutor-callout-border: #f59e0b;
+}
+
+body.dark-tutor {
+  --tutor-bg: #1c1917;
+  --tutor-card-bg: #292524;
+  --tutor-text: #f5f5f4;
+  --tutor-muted: #a8a29e;
+  --tutor-accent: #f97316;
+  --tutor-accent-hover: #ea580c;
+  --tutor-border: #44403c;
+  --tutor-callout: #451a03;
+  --tutor-callout-border: #b45309;
+}

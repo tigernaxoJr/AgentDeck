@@ -1011,7 +1011,7 @@ interface TutorReply {
 
 | CLI | 版本 | 圖片引用方式（PromptPath / AtMention / Flag / 不支援） | 能寫 out/turn.json | 模型 | 平均延遲 | 平均 token | 與 §6.1 旗標差異 |
 |---|---|---|---|---|---|---|---|
-| agy | | | | | | | |
-| claude | | | | | | | |
-| gemini | | | | | | | |
-| codex | | | | | | | |
+| agy | 1.3.5 | PromptPath (view_file / python) | ✅ (工具寫入) | 預設 | ~34s | ~88k (含 agent 迴圈) | 無差異，Windows 需注意單雙引號避免轉義問題 |
+| claude | 2.1.296 | PromptPath (文件/工具模式) | 未登入 (Not logged in) | opus-5-5 | - | - | 無差異 |
+| gemini | 0.3.4 | AtMention (文件模式) | 未設定 API Key | 預設 | - | - | 無差異 |
+| codex | 未安裝 | Flag{"-i"} | - | - | - | - | 未安裝 |

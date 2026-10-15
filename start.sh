@@ -35,13 +35,13 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # 2. 啟動後端 (Rust Axum)
 echo "📦 [1/2] 正在啟動後端服務 (Rust Axum on :3000)..."
-cd "$ROOT_DIR/backend-rust"
+cd "$ROOT_DIR/backend"
 cargo run &
 BACKEND_PID=$!
 
 # 3. 啟動前端 (Vue 3 + Vite)
 echo "🎨 [2/2] 正在啟動前端服務 (Vue 3 Vite on :5173)..."
-cd "$ROOT_DIR/frontend-vue"
+cd "$ROOT_DIR/frontend"
 pnpm run dev &
 FRONTEND_PID=$!
 

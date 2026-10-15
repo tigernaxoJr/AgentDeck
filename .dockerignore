@@ -7,5 +7,5 @@
 *.db
 *.db-shm
 *.db-wal
-backend-rust/antigravity_tasks.db*
-frontend-vue/dist
+backend/antigravity_tasks.db*
+frontend/dist

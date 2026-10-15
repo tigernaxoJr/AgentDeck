@@ -3,13 +3,21 @@ target/
 **/*.rs.bk
 *.pdb
 
-# SQLite database files
+# SQLite database files & Tutor local data (excluded due to copyright & size)
 *.db
 *.db-wal
 *.db-shm
+backend/tutor_data/
 
-# Antigravity CLI artifacts
+# Antigravity CLI artifacts & temporary runs
 .antigravity_out/
+scratch/
+scratch_probe.py
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Node / Frontend
 node_modules/
@@ -32,3 +40,6 @@ dist-ssr/
 *.sw?
 .DS_Store
 Thumbs.db
+
+databases.zip
+

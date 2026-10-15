@@ -12,7 +12,7 @@ Write-Host "==================================================" -ForegroundColor
 Write-Host "📦 [1/2] 正在啟動後端服務 (Rust Axum on :3000)..." -ForegroundColor Yellow
 $BackendJob = Start-Job -ScriptBlock {
     param($Dir)
-    Set-Location "$Dir\backend-rust"
+    Set-Location "$Dir\backend"
     cargo run
 } -ArgumentList $RootDir
 
@@ -20,7 +20,7 @@ $BackendJob = Start-Job -ScriptBlock {
 Write-Host "🎨 [2/2] 正在啟動前端服務 (Vue 3 Vite on :5173)..." -ForegroundColor Yellow
 $FrontendJob = Start-Job -ScriptBlock {
     param($Dir)
-    Set-Location "$Dir\frontend-vue"
+    Set-Location "$Dir\frontend"
     pnpm run dev
 } -ArgumentList $RootDir
 
