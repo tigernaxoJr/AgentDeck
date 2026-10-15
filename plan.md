@@ -10,7 +10,8 @@
 | # | 需求 | 設計對應 |
 |---|------|----------|
 | R1 | 以現有 agy（Antigravity CLI）當 AI 引擎 | 預設後端為 `AgyAdapter`，沿用 `backend-rust` 既有 agy 旗標 |
-| R9 | 預留相容各家 AI CLI 的空間 | `tutor/ai/`：`AiEngine` trait（業務層唯一依賴）＋ `CliAdapter` trait（每家 CLI 一個小 adapter），見 §6 |
+| R9 | 預留相容各家 AI CLI 的空間 | 獨立 crate `crates/ai-cli`：`AiEngine` trait ＋ `CliAdapter` trait（每家 CLI 一個 adapter），不認識任何業務；見 §6 |
+| R10 | 整體使用 VSA + DDD，小模組合併 | 架構規則見 §1.1 |
 | R2 | AI 看題目帶學童複習，學童手上有實體書 | 題庫每題記錄 `book_page` / `book_where`，AI 可叫學童「翻到第 N 頁 某處」 |
 | R3 | 學童答題，AI 批改並教不會的地方 | 每題一個小型狀態機：作答 → 批改 → 提示 → 再答 → 講解 |
 | R4 | 圖片 AI 難以描述 → 叫學童看書 | 有圖的題目，prompt 強制要求以 `book_ref` 指引而非口述圖片 |
@@ -36,27 +37,31 @@
 
 ```
 ┌──────────────────────────── 瀏覽器（電視/平板，大字護眼） ────────────────────────────┐
-│ Vue 3  /tutor                                                                          │
-│  StudentPicker → SessionSetup → TutorSession（題卡｜書本指引｜作答區｜AI 對話）→ Report   │
+│ Vue 3  /tutor   （前端同樣按 feature 切片，見 §2）                                       │
+│  start（選學童/設定）→ tutor-session（題卡｜書本指引｜作答區｜AI 對話）→ parent-report    │
 │  HandwritingPad.vue（米字格 / 自由畫布 / 圖上作答）→ PNG base64                         │
-│  speechSynthesis(zh-TW) 朗讀 AI 回覆（Phase 5，可選）                                   │
 └───────────────┬────────────────────────────────────────────────────────────────────────┘
                 │ REST JSON  /api/tutor/*
-┌───────────────▼──────────────────── backend-rust (Axum) ───────────────────────────────┐
-│ tutor/routes.rs ── tutor/engine.rs（每題狀態機、選題、規則批改）                        │
-│                     │            │                                                     │
-│                     │            └─ tutor/srs.rs（Leitner 排程、弱點分數）              │
-│                     ├─ tutor/prompts.rs（組 prompt，純函式，可單元測試）                │
-│                     ├─ tutor/ai/  dyn AiEngine ◄── 業務層只認這個 trait               │
-│                     │     ├─ CliEngine<A: CliAdapter>（spawn/timeout/收集輸出/讀檔）   │
-│                     │     │    ├─ AgyAdapter（預設）  ├─ ClaudeCodeAdapter              │
-│                     │     │    ├─ GeminiCliAdapter    ├─ CodexAdapter                   │
-│                     │     │    └─ GenericAdapter（TOML 設定的任意 CLI）                │
-│                     │     ├─ FallbackEngine（依序嘗試多個 engine）                      │
-│                     │     └─ MockEngine（測試）／(未來) HttpApiEngine                   │
-│                     └─ tutor/db.rs（sqlx，tutor.db）                                    │
+┌───────────────▼──────────────── backend-rust（binary crate） ──────────────────────────┐
+│ tutor/                                                                                  │
+│  features/  ← VSA：一個用例一個檔（handler + DTO + 編排）                                │
+│   students  catalog  start_session  session_nav  answer  ask_tutor  report  assets      │
+│   bank_import  bank_admin  bank_enrich  ai_admin                                        │
+│        │ 有業務規則的 slice 才經過 ↓          CRUD slice 直接 sqlx ↘                     │
+│  domain/  ← DDD：純資料＋純函式，無 I/O                                    shared/       │
+│   question（題目/答案/規則批改）  session（Session 聚合：教學狀態機、選題）  db.rs       │
+│   progress（Mastery/ConceptWeakness：間隔複習、弱點）                       dto.rs      │
+│  store.rs ← 聚合的載入/儲存（sqlx）                                         error.rs    │
+│  ai/      ← 防腐層（ACL）：prompts、AiTurn schema、guard、ai_calls 紀錄、後端設定        │
+│        │ 只透過 ai_cli 的公開 API                                                       │
+├────────▼────────────────────────────────────────────────────────────────────────────────┤
+│ crates/ai-cli（library crate，獨立，不依賴 tutor/sqlx/axum）                            │
+│   trait AiEngine ── CliEngine<A: CliAdapter> ── Agy / ClaudeCode / GeminiCli / Codex /   │
+│                  │                              Generic(TOML)                            │
+│                  ├─ MockEngine（feature "mock"）  └─ (未來) HttpApiEngine                │
+│   call_json<T>()：依序容錯＋解析＋重試　　Registry：依設定建立 engines                    │
 └───────────────┬───────────────────────────────┬────────────────────────────────────────┘
-                │ spawn per turn                │
+                │ spawn per call                │
         ┌───────▼──────────────┐        ┌───────▼───────┐
         │ <cli> … "<prompt>"     │ cwd=  │ tutor.db      │
         │ 讀 answer.png          │ runs/ │ (SQLite WAL)  │
@@ -68,10 +73,37 @@
 
 1. **AI 呼叫是無狀態的**：每次呼叫 AI 都由後端從 DB 組出完整上下文（題目、本題已發生的對話、學童弱點）。不依賴任何 CLI 的對話記憶 → 重啟、換模型、換 CLI 都不影響。
 2. **能用規則批改就不叫 AI**：是非/選擇題由後端直接比對答案（毫秒回應）。**答對**用罐頭鼓勵語，**答錯**才叫 AI 教學。手寫/簡答題才需 AI 批改。這把 AI 呼叫次數與等待時間壓到最低。
-3. **AI 只輸出結構化 JSON**：AI 決定「說什麼」與「建議動作」，但**狀態轉移由後端 engine 決定**（AI 的 `action` 只是建議，engine 會依嘗試次數覆寫）。避免 AI 失控跳題或洩答案。
-4. **答案不送到前端**：前端拿到的題目 view 不含 `answer`/`explanation`，直到 engine 決定揭曉。
-5. **AI CLI 可抽換**：engine/routes 只依賴 `Arc<dyn AiEngine>`；各家 CLI 的差異（旗標、圖片傳法、輸出格式）全部收斂在 `CliAdapter` 的兩個純函式（組指令、解析輸出）。新增一家 CLI = 新增一個 adapter 檔案＋註冊一行，不動業務程式碼。
+3. **AI 只輸出結構化 JSON，狀態轉移由 domain 決定**：AI 決定「說什麼」並給「建議動作」；`Session` 聚合依嘗試次數決定實際動作（提示/講解/揭曉），ACL 再做洩答案與頁碼檢查。避免 AI 失控跳題或洩答案。
+4. **答案不送到前端**：前端拿到的題目 view 不含 `answer`/`explanation`，直到 domain 決定揭曉。
+5. **AI CLI 引擎是獨立 crate**：`crates/ai-cli` 只懂「把 prompt＋檔案交給某個 CLI、拿回 JSON」，不認識學童、題目、資料庫。編譯器保證邊界（它無法 import tutor）。各家 CLI 差異收斂在 `CliAdapter` 的兩個純函式。日後 Console（`executor/runner.rs`）也可改用它（T-22）。
 6. **與現有 Console 共存**：同一個 Rust 執行檔、同一個前端，新增 `/api/tutor/*` 與 `/tutor` 路由；Tutor 使用獨立的 `tutor.db`，不動既有 `antigravity_tasks.db`。
+
+### 1.1 架構規則（VSA + 務實 DDD）— 所有工單必須遵守
+
+**VSA（Vertical Slice Architecture）**
+1. 以「用例」為單位切檔：`tutor/features/<slice>.rs` 內含該用例的 axum handler、request/response DTO、編排邏輯、**只有它用到的 SQL**。每個 slice 匯出 `pub fn routes() -> Router<TutorState>`，由 `tutor/mod.rs` 合併。
+2. **slice 之間不得互相 import**。需要共用的東西只能放在：`domain/`（業務規則）、`store.rs`（聚合存取）、`ai/`（AI 防腐層）、`shared/`（DB 連線、錯誤型別、跨 slice 的 view DTO）。
+3. 新增功能 = 新增一個 slice 檔；修改功能 = 只改該 slice（＋必要時 domain）。
+
+**DDD 只用在有業務規則的核心**
+
+| 區塊 | 子域類型 | 做法 |
+|---|---|---|
+| 教學流程（`Session` 狀態機、選題）、熟練度（間隔複習、弱點）、題目答案判定 | **核心域** | `domain/` 聚合/值物件＋純函式，完整單元測試 |
+| 題庫管理（匯入、AI 補頁碼、管理頁編輯） | 支援域 | 一般 slice，直接 sqlx；用到 `domain::question` 的正規化函式即可 |
+| 學童、科目目錄、報表、設定 | CRUD | 一般 slice，直接 sqlx，**不建 entity/repository/service** |
+| AI CLI 呼叫 | 通用子域 | 獨立 crate `ai-cli`；tutor 端以 `tutor/ai/` 當防腐層，把 AI 的 JSON 轉成 domain 概念 |
+
+**DDD 戰術元素的取捨**
+- 用：聚合（`Session`、`StudentProgress`）、值物件（`Answer`、`Verdict`、`BookRef`）、聚合方法回傳「結果 struct」由 slice 寫回 DB。
+- 不用：domain event bus、CQRS、Unit of Work、repository trait、application service 層、DI 容器。一次請求的寫入由 slice 在**單一 sqlx transaction** 完成。
+- `domain/` 為純程式：**不得** import `sqlx`、`axum`、`tokio`、`ai_cli`、`std::fs`；目前時間以參數 `now: DateTime<Utc>` 傳入；亂數以 `seed` 傳入。
+
+**大小與合併規則**
+- 預期 **< ~80 行**、或**只有一個呼叫者**的模組 → 併入呼叫者，不另開檔。檔案超過 **~400 行**才考慮拆。
+- 只有一個實作的東西**不建 trait**。例外：跨程序/外部系統邊界（`AiEngine`、`CliAdapter`）。
+- 測試替身優先用 SQLite `:memory:` 與 `ai_cli::MockEngine`，不要為了 mock 而抽 trait。
+- 同性質的極小 slice 合併（例：取得 session / 下一題 / 結束 → `session_nav.rs`）。
 
 ---
 
@@ -79,49 +111,80 @@
 
 ```
 backend-rust/
+  Cargo.toml                       # 新增 ai-cli = { path = "crates/ai-cli" }
+  crates/ai-cli/                   # ── 通用子域：AI CLI 引擎（library crate）──
+    Cargo.toml                     # 依賴：tokio, serde, serde_json, async-trait, toml；features = ["mock"]
+    src/
+      lib.rs                       # [T-07] 公開 API re-export
+      engine.rs                    # [T-07] AiEngine trait、Capabilities、VisionMode、AiInvocation、AiRawResult、AiError、TokenUsage
+      cli.rs                       # [T-07] CliAdapter trait、CommandSpec、StreamItem、CliEngine<A>、resolve/which
+      call.rs                      # [T-07] call_json<T>()：依序容錯、解析、重試；回 CallRecord 清單（不碰 DB）
+      registry.rs                  # [T-07] Registry：依 BackendConfig 建 Vec<Arc<dyn AiEngine>>、health check
+      mock.rs                      # [T-07] MockEngine（cfg(any(test, feature="mock"))）
+      adapters/agy.rs              # [T-07] AgyAdapter（預設；含 resolve_agy_bin，搬自 runner.rs）
+      adapters/claude_code.rs      # [T-08]
+      adapters/gemini_cli.rs       # [T-08]
+      adapters/codex.rs            # [T-08]
+      adapters/generic.rs          # [T-08] 由 ai_backends.toml 設定的任意 CLI
+      adapters/README.md           # [T-07] 新增一家 CLI 的步驟
+    tests/fake_cli/                # [T-07] 假 CLI
+    tests/fixtures/<id>_stream.txt # [T-00/T-08] 各 CLI 真實輸出樣本
   src/
-    executor/cli_bin.rs          # [T-01] 從 runner.rs 抽出 resolve_cli_bin()（agy 偵測）
+    executor/runner.rs             # [T-07] 改呼叫 ai_cli::adapters::agy::resolve_agy_bin()（其餘不動）
     tutor/
-      mod.rs                     # pub mod ...; pub struct TutorState
-      schema.sql                 # [T-02] DDL，include_str! 載入
-      db.rs                      # [T-02] 連線、CRUD
-      models.rs                  # [T-03] Question / Attempt / TutorReply 等 serde 型別
-      import.rs                  # [T-04] 匯入 jamie-exam questions.json
-      srs.rs                     # [T-05] Leitner 排程、弱點分數
-      grading.rs                 # [T-06] 規則批改
-      prompts.rs                 # [T-07] prompt 模板
-      ai/
-        mod.rs                   # [T-08a] AiEngine trait、AiInvocation、AiRawResult、Capabilities、AiError
-        cli_engine.rs            # [T-08a] CliEngine<A>：通用 spawn/timeout/輸出收集/讀 out/*.json
-        adapter.rs               # [T-08a] CliAdapter trait、CommandSpec、StreamItem
-        adapters/agy.rs          # [T-08a] AgyAdapter（預設）
-        adapters/claude_code.rs  # [T-08b]
-        adapters/gemini_cli.rs   # [T-08b]
-        adapters/codex.rs        # [T-08b]
-        adapters/generic.rs      # [T-08b] 由 ai_backends.toml 設定的任意 CLI
-        registry.rs              # [T-08a] 依設定建立 Arc<dyn AiEngine>、FallbackEngine
-        turn.rs                  # [T-08a] call_turn()：組檔案 → engine.run → 解析 AiTurn → 重試 → 寫 ai_calls
-        mock.rs                  # [T-08a] MockEngine（#[cfg(test)] 或 feature）
-      engine.rs                  # [T-09] 狀態機、選題
-      routes.rs                  # [T-10] Axum 路由
-  tests/fake_cli/                # [T-08a] 假 CLI（測試 CliEngine 用），輸出固定 turn.json
-tutor_data/                      # 執行期資料（加入 .gitignore）
+      mod.rs                       # [T-10] TutorState、routes() 合併所有 slice、啟動初始化
+      shared/
+        db.rs                      # [T-01] open()、schema.sql include_str!
+        schema.sql                 # [T-01]
+        dto.rs                     # [T-05] 跨 slice 的 view：QuestionView、SessionView、TutorReply、BookRef
+        error.rs                   # [T-05] ApiError（→ axum IntoResponse，{error, message}）
+      domain/                      # ── 核心域：純程式 ──
+        question.rs                # [T-02] Question、QType、InputMode、Answer、grade_choice、answer_display、contains_answer、normalize_import
+        progress.rs                # [T-03] Mastery、ConceptWeakness、Outcome、next_mastery、update_weakness
+        session.rs                 # [T-04] Session 聚合（狀態機）、TeachAction、Step、select_queue
+      store.rs                     # [T-05] 聚合載入/儲存：load_session/save_session、load_progress/save_progress、load_question
+      ai/                          # ── 防腐層 ──
+        prompts.rs                 # [T-09] prompt 模板（依 Capabilities）
+        turn.rs                    # [T-09] AiTurn schema、call_turn()（包 ai_cli::call_json）、guard、寫 ai_calls、罐頭回覆
+        backends.rs                # [T-09] settings 表 ↔ ai_cli::Registry、engines_for(purpose)
+      features/                    # ── VSA slices ──
+        students.rs                # [T-10] GET/POST /students（CRUD）
+        catalog.rs                 # [T-10] GET /subjects（CRUD 查詢）
+        assets.rs                  # [T-10] GET /assets/*（防 path traversal）
+        bank_import.rs             # [T-06] POST /admin/import
+        start_session.rs           # [T-11] POST /sessions（查候選 → domain::session::select_queue）
+        session_nav.rs             # [T-11] GET /sessions/:id、POST next、POST end（合併的小 slice）
+        answer.rs                  # [T-11] POST answer、POST self_grade
+        ask_tutor.rs               # [T-11] POST message
+        report.rs                  # [T-12] GET /students/:id/report（CRUD 查詢）
+        bank_admin.rs              # [T-12] GET/PATCH /admin/questions/:id
+        ai_admin.rs                # [T-12] /admin/ai/backends、/admin/ai/test
+        bank_enrich.rs             # [T-17] POST /admin/enrich
+tutor_data/                        # 執行期資料（加入 .gitignore）
   tutor.db
-  assets/<subject_id>/crops/*.png   # 匯入時複製
-  assets/<subject_id>/scans/*.jpg   # 匯入時複製（給 AI 看整頁用）
-  answers/<attempt_id>.png          # 學童手寫原圖（保留，給家長看）
-  runs/<call_id>/                   # AI CLI 每次呼叫的工作目錄（7 天後清除）
+  ai_backends.toml                 # 可選，GenericAdapter 設定
+  assets/<subject_id>/crops/*.png  # 匯入時複製
+  assets/<subject_id>/scans/*.jpg  # 匯入時複製（給 AI 看整頁用）
+  answers/<attempt_id>.png         # 學童手寫原圖（保留，給家長看）
+  runs/<call_id>/                  # AI CLI 每次呼叫的工作目錄（7 天後清除）
 frontend-vue/src/
-  router.ts                      # [T-11] vue-router：/ (既有 Console)、/tutor/*
+  router.ts                        # [T-13] vue-router：/ (既有 Console，不搬動)、/tutor/*
   tutor/
-    api.ts  types.ts
-    views/StudentPicker.vue  SessionSetup.vue  TutorSession.vue  ParentReport.vue  QuestionAdmin.vue
-    components/QuestionCard.vue  BookRefCallout.vue  AnswerPanel.vue  HandwritingPad.vue  TutorBubble.vue
+    shared/  http.ts  types.ts  BigButton.vue  theme.css      # [T-13] 跨 feature 共用
+    features/
+      start/          StudentPicker.vue  SessionSetup.vue  api.ts            # [T-16]
+      tutor-session/  TutorSession.vue  useTutorSession.ts  api.ts
+                      QuestionCard.vue  BookRefCallout.vue  AnswerPanel.vue
+                      TutorBubble.vue  HandwritingPad.vue                    # [T-14][T-15]
+      parent-report/  ParentReport.vue  api.ts                               # [T-16]
+      admin/          QuestionAdmin.vue  AiBackends.vue  api.ts              # [T-16]
 ```
+
+前端同樣遵守 §1.1：feature 之間不互相 import，共用只能放 `tutor/shared/`；只被一個 feature 用的元件（例如 `HandwritingPad`）放在該 feature 內。
 
 ---
 
-## 3. 資料庫設計（`backend-rust/src/tutor/schema.sql`）
+## 3. 資料庫設計（`backend-rust/src/tutor/shared/schema.sql`）
 
 啟動時執行 `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`，DDL 全部 `CREATE TABLE IF NOT EXISTS`。時間一律存 **UTC ISO-8601 字串**（`chrono::Utc::now().to_rfc3339()`）。
 
@@ -278,23 +341,23 @@ CREATE TABLE IF NOT EXISTS settings (            -- 執行期可調設定（AI �
 
 > 國文：AI vision 能判斷「錯字、別字、漏字、明顯多/少筆劃」，**無法判斷筆順**，文件與 UI 都不要宣稱能。
 
-### 4.2 匯入規則（T-04）
+### 4.2 匯入規則（`features/bank_import.rs`，T-06；欄位正規化函式在 `domain/question.rs`）
 
 - 來源根目錄由環境變數 `TUTOR_IMPORT_ROOT`（預設 `C:\workspace\jamie-exam`）。
 - `subject`：`社會`→`social`、`自然`→`nature`、`國文`→`chinese`、`數學`→`math`。
 - `unit`：依出現順序編號 `{subject_id}_{01..}`；`ord` 為出現順序。
 - `image`：`crops/xxx.png` → 複製到 `tutor_data/assets/{subject_id}/crops/xxx.png`，`image_path` 存相對路徑。
-- `book_page` 推導：`image` 檔名符合 `_(\d{3})_` → 該數字 + `page_offset`；否則同一 `unit` 內**前一題**有頁碼就沿用；都沒有則 `NULL`（由 T-15 補，或家長在管理頁填）。
+- `book_page` 推導：`image` 檔名符合 `_(\d{3})_` → 該數字 + `page_offset`；否則同一 `unit` 內**前一題**有頁碼就沿用；都沒有則 `NULL`（由 T-17 補，或家長在管理頁填）。
 - `book_where`：匯入時留空。
-- `concept_tags`：匯入時以 `section` 與 `keywords` 粗略填入；T-15 會用 AI 補強。
+- `concept_tags`：匯入時以 `section` 與 `keywords` 粗略填入；T-17 會用 AI 補強。
 - 掃描頁：`data/scans/{社會|自然}/*.jpg` 複製到 `tutor_data/assets/{subject_id}/scans/`。
 - **冪等**：以 `id` UPSERT；若 `book_page`/`book_where`/`concept_tags_json` 已有人工值（非 NULL/非空），不要覆寫。
 
 ---
 
-## 5. 教學狀態機（engine，T-09）
+## 5. 教學狀態機（`domain/session.rs`，T-04）
 
-每個 session 同時只有一題「目前題目」，狀態存在 `sessions.q_state / q_try / q_hinted`。
+每個 session 同時只有一題「目前題目」，狀態存在 `sessions.q_state / q_try / q_hinted`。`Session` 聚合以純方法表達下列轉移：`fn apply_verdict(&mut self, v: Verdict, now) -> Step`，`Step { state, action: TeachAction(Praise|Hint|Explain|RetryUnreadable), reveal: bool, outcome: Option<Outcome>, requeued: bool }`；slice 依 `Step` 決定是否呼叫 AI 與如何回應。「每題最多追加 1 次」由 queue 中該 id 出現次數判斷，不另存欄位。
 
 ```
              ┌──────────── answer(correct) ─────────────► REVEALED ──next──► 下一題 ASKING
@@ -311,12 +374,12 @@ ASKING ──answer──► 批改
 任何狀態：student_message（學童打字/說「我不懂」「為什麼」）──► AI 回答 ──► 狀態不變
 ```
 
-**engine 覆寫規則（AI 的 `action` 只是建議）：**
+**覆寫規則（AI 的 `action` 只是建議；action 由 `Session` 決定、洩答檢查在 `tutor/ai/turn.rs`）：**
 - `q_try==1` 且答錯 → 強制 `hint`，且送前端前**移除** `say` 中出現的正確答案字串（簡單 `contains` 檢查；命中則改用罐頭提示「再想想看，可以翻翻課本喔！」並記 log）。
 - `q_try>=2` 答錯 → 強制 `explain`，回傳 `reveal: {answer, explanation}`。
 - 答對 → `reveal` 一併回傳（讓學童看到解析）。
 
-### 5.1 熟練度更新（srs.rs，T-05）
+### 5.1 熟練度更新（`domain/progress.rs`，T-03）
 
 每題「結束」（進入 REVEALED 或 EXPLAINED）時更新一次 `mastery`：
 
@@ -332,7 +395,7 @@ ASKING ──answer──► 批改
 - 最終仍錯 / 提示後才對：`score += 1`（提示後才對 `+0.5`），`wrong_count += 1`，`last_note = AI 的 misconception`。
 - 第一次就對：`score *= 0.6`；`score < 0.2` 時設為 0。
 
-### 5.2 選題（engine `build_queue`，T-09）
+### 5.2 選題（`domain/session.rs::select_queue`，T-04；候選題目查詢在 `features/start_session.rs`）
 
 最多 `N = 15` 題（可由請求參數覆寫）。
 
@@ -347,13 +410,13 @@ ASKING ──answer──► 批改
 
 ---
 
-## 6. AI 引擎抽象層與呼叫規格（T-08a / T-08b）
+## 6. AI 引擎（`crates/ai-cli`，T-07 / T-08）與防腐層（`tutor/ai/`，T-09）
 
 ### 6.0 分層與 trait 設計
 
 ```
-engine.rs / routes.rs
-      │  只呼叫 ai::turn::call_turn(engines, …)
+tutor/features/*（answer、ask_tutor、bank_enrich）
+      │  只呼叫 tutor::ai::turn::call_turn / ai_cli::call_json
       ▼
 ┌──────────────────────── trait AiEngine ────────────────────────┐  ← 業務層唯一依賴
 │ CliEngine<A: CliAdapter>   MockEngine   (未來) HttpApiEngine     │
@@ -370,10 +433,10 @@ engine.rs / routes.rs
 
 **兩層 trait 的理由**：`AiEngine` 讓「不是 CLI 的東西」（直接打 HTTP API、測試替身）也能接上；`CliAdapter` 讓新增一家 CLI 只要寫「怎麼組指令、怎麼讀輸出」，不必重寫行程管理。多後端容錯由 `call_turn` 依序嘗試 `Vec<Arc<dyn AiEngine>>` 完成（見下方），因為每換一個後端都要依它的能力**重新組 prompt**。
 
-#### `tutor/ai/mod.rs`
+#### `crates/ai-cli/src/engine.rs`
 
 ```rust
-/// 這家後端能做什麼。prompts.rs 與 engine.rs 依此調整行為。
+/// 這家後端能做什麼。tutor/ai/prompts.rs 與教學 slices 依此調整行為。
 #[derive(Debug, Clone, Serialize)]
 pub struct Capabilities {
     pub vision: VisionMode,          // 能否看圖、圖怎麼給
@@ -406,7 +469,7 @@ pub struct AiRawResult {
     pub backend_id: String,
     pub output_file: Option<String>, // expect_output_file 的內容（若有）
     pub final_text: Option<String>,  // CLI 最終回覆文字
-    pub usage: Option<TokenUsage>,   // 沿用 models::protocol::TokenUsage
+    pub usage: Option<TokenUsage>,   // crate 自己定義（欄位同 models::protocol::TokenUsage），不依賴 binary crate
     pub duration: Duration,
     pub stderr_tail: String,         // 最後 4KB，除錯用
 }
@@ -428,7 +491,7 @@ pub trait AiEngine: Send + Sync {
 }
 ```
 
-#### `tutor/ai/adapter.rs`
+#### `crates/ai-cli/src/cli.rs`
 
 ```rust
 pub struct CommandSpec {
@@ -442,7 +505,7 @@ pub enum StreamItem { TextDelta(String), FinalText(String), Usage(TokenUsage), I
 
 pub trait CliAdapter: Send + Sync + 'static {
     fn id(&self) -> &'static str;
-    fn default_program(&self) -> String;            // agy 用 executor::cli_bin::resolve_cli_bin()
+    fn default_program(&self) -> String;            // agy 用 adapters::agy::resolve_agy_bin()
     fn capabilities(&self) -> Capabilities;
     fn version_args(&self) -> Vec<String> { vec!["--version".into()] }
     /// 純函式：依 invocation 組出指令（cwd 由 CliEngine 設為 run 目錄）
@@ -459,32 +522,39 @@ pub trait CliAdapter: Send + Sync + 'static {
 4. `timeout` 到 → kill → `AiError::Timeout`；program 找不到 → `NotInstalled`；非 0 結束且無任何輸出 → `NonZeroExit`。
 5. 讀 `expect_output_file`（存在才讀）→ 組 `AiRawResult`。`final_text` = FinalText ?? 累積的 TextDelta。
 
-#### `tutor/ai/turn.rs`（業務層入口，與哪家 CLI 無關）
+#### `ai_cli::call_json`（crate 內，通用）與 `tutor/ai/turn.rs::call_turn`（ACL）
 
 ```rust
-/// 泛型版本：任何「要 AI 回一個 JSON」的用途都走這裡（T-15 enrich、T-16 萃取題目）
-pub async fn call_json<T: DeserializeOwned>(engines, purpose, prompt_builder, files, images, output_file: &str, db, cfg)
-    -> Result<(T, CallMeta), AiError>;
+// ── crates/ai-cli/src/call.rs（通用，不認識 tutor、不碰 DB）──
+pub struct CallRecord { pub backend: String, pub model: Option<String>, pub duration: Duration,
+                        pub usage: Option<TokenUsage>, pub ok: bool, pub error: Option<String>, pub raw_tail: String }
+pub struct CallSpec<'a> {
+    pub needs_vision: bool,
+    pub build_prompt: &'a (dyn Fn(&Capabilities) -> String + Send + Sync), // 每換一個後端就依其能力重組 prompt
+    pub files: Vec<RunFile>, pub images: Vec<String>,
+    pub output_file: &'a str,               // 例 "out/turn.json"
+    pub timeout: Duration,
+}
+pub async fn call_json<T: DeserializeOwned>(engines: &[Arc<dyn AiEngine>], spec: CallSpec<'_>)
+    -> (Result<T, AiError>, Vec<CallRecord>);
 
-/// 教學對話專用：call_json::<AiTurn> + 依 purpose 組 prompt
-pub async fn call_turn(
-    engines: &[Arc<dyn AiEngine>],   // registry 依用途給的清單，依序容錯
-    purpose: AiPurpose, ctx: &PromptContext,
-    files: Vec<RunFile>, images: Vec<String>,
-    db: &SqlitePool, cfg: &AiConfig,
-) -> Result<(AiTurn, CallMeta), AiError>
+// ── backend-rust/src/tutor/ai/turn.rs（防腐層）──
+pub async fn call_turn(backends: &Backends, purpose: AiPurpose, ctx: &PromptContext,
+                       files: Vec<RunFile>, conn: &SqlitePool) -> Result<TutorFeedback, TurnError>;
 ```
 
-對清單中每個 engine：
-1. 若 `purpose` 需要看圖而 `capabilities().vision == None` → 跳過此 engine。
-2. `prompts::build_prompt(purpose, ctx, engine.capabilities())` → `engine.run()`。
-3. 解析：① `output_file` ② `final_text` 中第一個 `{` 到最後一個 `}` → serde 成 `AiTurn`。解析失敗在**同一 engine** 重試 1 次（prompt 加「上次輸出不是合法 JSON，請只輸出 JSON」）。
+`call_json` 對清單中每個 engine：
+1. `spec.needs_vision` 而 `capabilities().vision == None` → 跳過此 engine。
+2. `(spec.build_prompt)(engine.capabilities())` → `engine.run()`。
+3. 解析：① `output_file` ② `final_text` 中第一個 `{` 到最後一個 `}` → serde 成 `T`。解析失敗在**同一 engine** 重試 1 次（prompt 尾加「上次輸出不是合法 JSON，請只輸出 JSON」）。
 4. `NotInstalled / Spawn / Timeout / NonZeroExit / EmptyOutput` 或兩次解析失敗 → 換下一個 engine。
-5. 每次呼叫寫一筆 `ai_calls`（含 `backend` 欄位）。
+5. 每次 `run` 產生一筆 `CallRecord`。
 
-全部失敗回 `Err`，engine.rs 改用罐頭回覆（§6.4）；若是因為沒有任何具 vision 的後端，回 `selfGradeAvailable=true`。
+**分工**：`ai_cli::call_json<T>` 只負責「依序容錯＋解析＋重試」，不論成敗都回傳 `Vec<CallRecord>`。`tutor/ai/turn.rs::call_turn` 是防腐層：依 purpose 從 `backends.engines_for()` 取清單、以 `prompts::build_prompt` 當 `build_prompt` 閉包、呼叫 `call_json::<AiTurn>`、把 `CallRecord` 寫入 `ai_calls`、做洩答/頁碼 guard，最後轉成 domain 用的 `TutorFeedback { verdict, say, book_ref, recognized_text, misconception, concept_tags, followup }`。
 
-#### 能力驅動的行為（prompts.rs / engine.rs 必須遵守）
+全部失敗回 `Err`，slice 改用罐頭回覆（§6.4）；若是因為沒有任何具 vision 的後端，回 `selfGradeAvailable=true`。
+
+#### 能力驅動的行為（tutor/ai/prompts.rs 與教學 slices 必須遵守）
 
 | Capability | 為 true / 有值 | 為 false / None |
 |---|---|---|
@@ -497,11 +567,11 @@ pub async fn call_turn(
 
 ### 6.1 各家 Adapter 規格
 
-> ⚠ 除 agy（已在本 repo `runner.rs` 使用）外，其餘旗標依各 CLI 公開文件撰寫，**實作 T-08b 時必須先跑 `<cli> --help` 核對**；不符就以實測為準，並更新本表。
+> ⚠ 除 agy（已在本 repo `runner.rs` 使用）外，其餘旗標依各 CLI 公開文件撰寫，**實作 T-08 時必須先跑 `<cli> --help` 核對**；不符就以實測為準，並更新本表。
 
 | id | 預設 program | 指令（`{p}`=prompt，`{m}`=model） | vision | reads / writes | 輸出解析 |
 |---|---|---|---|---|---|
-| `agy`（預設） | `resolve_cli_bin()`（`agy`→`antigravity`） | `--dangerously-skip-permissions --output-format stream-json [--model {m}] -p {p}` | 依 T-00 結果（預期 `PromptPath`） | ✅ / ✅ | NDJSON：`/step_update/text_delta`→TextDelta、`/result/response`→FinalText、`/result/usage`｜`/step_update/usage`｜`/usage`→Usage（同 runner.rs） |
+| `agy`（預設） | `resolve_agy_bin()`（`agy`→`antigravity`） | `--dangerously-skip-permissions --output-format stream-json [--model {m}] -p {p}` | 依 T-00 結果（預期 `PromptPath`） | ✅ / ✅ | NDJSON：`/step_update/text_delta`→TextDelta、`/result/response`→FinalText、`/result/usage`｜`/step_update/usage`｜`/usage`→Usage（同 runner.rs） |
 | `claude` | `claude` | `-p {p} --output-format stream-json --verbose --dangerously-skip-permissions [--model {m}]` | `PromptPath` | ✅ / ✅ | NDJSON：`type=="result"` 的 `/result`→FinalText、`/usage`→Usage |
 | `gemini` | `gemini` | `-p {p} --yolo [-m {m}]`（若版本支援 `--output-format json` 則加上） | `AtMention` | ✅ / ✅ | 純文字：每行 TextDelta；JSON 模式取 `/response` |
 | `codex` | `codex` | `exec --full-auto --skip-git-repo-check [-m {m}] [-i <img>]… {p}` | `Flag{"-i"}` | ✅ / ✅ | 純文字 → TextDelta |
@@ -534,9 +604,10 @@ version_args = ["--version"]
 
 `args` 中的 `{model_args}` / `{image_args}` 是**整組展開**的佔位元素；其他字串內的 `{prompt}`、`{model}`、`{image}` 做文字替換。不經過 shell（直接 `Command::new`），不支援管線或重導向。
 
-#### `tutor/ai/registry.rs`：選擇後端
+#### `crates/ai-cli/src/registry.rs` ＋ `tutor/ai/backends.rs`：選擇後端
 
-- 設定來源優先序：DB `settings` 表（管理頁可即時切換）> 環境變數 > 預設 `"agy"`。
+- crate 的 `Registry::build(cfg: &BackendConfig)` 只吃設定 struct（id 清單、各後端 model / bin 覆寫、toml 路徑），**不讀 DB、不讀環境變數**；讀取設定是 `tutor/ai/backends.rs` 的事。
+- 設定來源優先序（`backends.rs`）：DB `settings` 表（管理頁可即時切換）> 環境變數 > 預設 `"agy"`。
 - `ai_backends`（環境變數 `TUTOR_AI_BACKENDS`）：逗號分隔清單，例 `agy,claude` → 依序容錯。
 - `ai_backends_vision`（`TUTOR_AI_BACKENDS_VISION`）：看圖用途（手寫批改、enrich）專用清單；未設定則同主清單。例：平常用便宜的 A，看圖用 B。
 - 內建 id：`agy`、`claude`、`gemini`、`codex`；其他 id 到 `ai_backends.toml` 找；找不到 → log 警告並略過。
@@ -544,13 +615,13 @@ version_args = ["--version"]
 - 啟動時對每個後端跑 `health_check()`，結果存記憶體；`NotInstalled` 的後端從清單移除。清單變成空的 → 啟動不失敗，所有 AI 功能走罐頭/自評，並在管理頁顯示警告。
 - 對外提供：`fn engines_for(&self, purpose: AiPurpose) -> Vec<Arc<dyn AiEngine>>`；以 `ArcSwap` 或 `RwLock` 持有，`PUT /admin/ai/backends` 時重建。
 
-#### 新增一家 CLI 的步驟（寫進 `tutor/ai/adapters/README.md`）
+#### 新增一家 CLI 的步驟（寫進 `crates/ai-cli/src/adapters/README.md`）
 
 1. 複製 `adapters/agy.rs` 為 `adapters/<id>.rs`，實作 `CliAdapter`。
 2. 在 `registry.rs` 的 `match id { … }` 加一行。
 3. 單元測試：`build_command` 的 args 快照；`parse_line` 餵真實輸出樣本 `tests/fixtures/<id>_stream.txt`。
 4. 冒煙：`cargo test -- --ignored real_cli_<id>`。
-5. **不得**修改 engine.rs、prompts.rs、routes.rs；若非改不可，代表抽象漏了 → 回報，不要硬改。
+5. **不得**修改 `crates/ai-cli` 以外的任何檔案；若非改不可，代表抽象漏了 → 回報，不要硬改。
 
 ### 6.1b 呼叫共通規則
 
@@ -586,7 +657,7 @@ timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
 - `book_ref` 可為 `null`；`page` 必須等於 context 中題目的 `book_page`（或 enrich 提供的頁），engine 若發現 AI 給的頁碼不在允許清單 → 改用題目的 `book_page`。
 - `verdict="none"` 用於 `student_message`（純問答）。
 
-### 6.3 Prompt 模板（`prompts.rs`，純函式 + 單元測試）
+### 6.3 Prompt 模板（`tutor/ai/prompts.rs`，純函式 + 單元測試）
 
 共同 System 區塊（每次呼叫都放在最前面）：
 
@@ -634,7 +705,7 @@ timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
   任務：學童對你說：「{message}」。目前題目狀態：{q_state}（若為 asking / hinting，不能洩漏答案）。
   回答學童，verdict=none，action=answer_question 或 show_book。
   ```
-- **`enrich_page`**（T-15 離線用）：見 T-15。
+- **`enrich_page`**（T-17 離線用）：prompt 寫在 `features/bank_enrich.rs`，見 T-17。
 
 `context.json` 內容：
 ```json
@@ -657,33 +728,33 @@ timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
 
 ---
 
-## 7. HTTP API（`/api/tutor`，T-10）
+## 7. HTTP API（`/api/tutor`，T-10 ~ T-12；每列標註所屬 slice）
 
 所有回應 JSON；錯誤 `{ "error": "CODE", "message": "..." }`。沿用現有 auth middleware。
 
-| Method | Path | Body / Query | 回應 |
-|---|---|---|---|
-| GET | `/students` | | `[{id,name,grade}]` |
-| POST | `/students` | `{name, grade}` | `{id,...}` |
-| GET | `/subjects` | | `[{id,name,book_title,units:[{id,title,total,mastered}]}]`（mastered 需 `?student_id=`） |
-| POST | `/sessions` | `{student_id, mode, subject_id, unit_id?, limit?}` | `SessionView` |
-| GET | `/sessions/:id` | | `SessionView` |
-| POST | `/sessions/:id/answer` | `{question_id, kind:"choice"\|"text"\|"handwriting", choice?:string\|int, text?, image_png_base64?}` | `TutorReply` |
-| POST | `/sessions/:id/self_grade` | `{question_id, correct: bool}` | `TutorReply` |
-| POST | `/sessions/:id/message` | `{question_id, text}` | `TutorReply` |
-| POST | `/sessions/:id/next` | | `SessionView`（題目結束才允許，否則 409） |
-| POST | `/sessions/:id/end` | | `{answered, first_try_correct, weak_concepts:[...]}` |
-| GET | `/students/:id/report` | | `{weak_concepts, due_count, recent_wrong:[{question, attempts:[{verdict, input_image_url,...}]}]}` |
-| GET | `/assets/*path` | | 靜態檔（`tutor_data/assets` 與 `tutor_data/answers`，**防 path traversal**） |
-| POST | `/admin/import` | `{root?}` | `{subjects, units, questions}` 計數 |
-| GET/PATCH | `/admin/questions/:id` | `{book_page?, book_where?, concept_tags?, active?}` | Question（含答案） |
-| POST | `/admin/enrich` | `{subject_id}` | `{job_started:true}`（背景執行，T-15） |
-| GET | `/admin/ai/backends` | | `{available:[{id, version?, healthy, capabilities, model?}], active:["agy",...], activeVision:[...]}` |
-| PUT | `/admin/ai/backends` | `{active:["agy","claude"], activeVision?:[...]}` | 同上；寫入 `settings` 並重建 registry；未知或不健康的 id 回 400 |
-| POST | `/admin/ai/test` | `{backend_id, with_image: bool}` | 用固定測試題跑一次 `call_turn`，回 `{ok, durationMs, turn?, error?}`（管理頁「測試連線」按鈕） |
+| Method | Path | Body / Query | 回應 | Slice |
+|---|---|---|---|---|
+| GET | `/students` | | `[{id,name,grade}]` | `students` |
+| POST | `/students` | `{name, grade}` | `{id,...}` | `students` |
+| GET | `/subjects` | | `[{id,name,book_title,units:[{id,title,total,mastered}]}]`（mastered 需 `?student_id=`） | `catalog` |
+| POST | `/sessions` | `{student_id, mode, subject_id, unit_id?, limit?}` | `SessionView` | `start_session` |
+| GET | `/sessions/:id` | | `SessionView` | `session_nav` |
+| POST | `/sessions/:id/answer` | `{question_id, kind:"choice"\|"text"\|"handwriting", choice?:string\|int, text?, image_png_base64?}` | `TutorReply` | `answer` |
+| POST | `/sessions/:id/self_grade` | `{question_id, correct: bool}` | `TutorReply` | `answer` |
+| POST | `/sessions/:id/message` | `{question_id, text}` | `TutorReply` | `ask_tutor` |
+| POST | `/sessions/:id/next` | | `SessionView`（題目結束才允許，否則 409） | `session_nav` |
+| POST | `/sessions/:id/end` | | `{answered, first_try_correct, weak_concepts:[...]}` | `session_nav` |
+| GET | `/students/:id/report` | | `{weak_concepts, due_count, recent_wrong:[{question, attempts:[{verdict, input_image_url,...}]}]}` | `report` |
+| GET | `/assets/*path` | | 靜態檔（`tutor_data/assets` 與 `tutor_data/answers`，**防 path traversal**） | `assets` |
+| POST | `/admin/import` | `{root?}` | `{subjects, units, questions}` 計數 | `bank_import` |
+| GET/PATCH | `/admin/questions/:id` | `{book_page?, book_where?, concept_tags?, active?}` | Question（含答案） | `bank_admin` |
+| POST | `/admin/enrich` | `{subject_id}` | `{job_started:true}`（背景執行，T-17） | `bank_enrich` |
+| GET | `/admin/ai/backends` | | `{available:[{id, version?, healthy, capabilities, model?}], active:["agy",...], activeVision:[...]}` | `ai_admin` |
+| PUT | `/admin/ai/backends` | `{active:["agy","claude"], activeVision?:[...]}` | 同上；寫入 `settings` 並重建 registry；未知或不健康的 id 回 400 | `ai_admin` |
+| POST | `/admin/ai/test` | `{backend_id, with_image: bool}` | 用固定測試題跑一次 `call_turn`，回 `{ok, durationMs, turn?, error?}`（管理頁「測試連線」按鈕） | `ai_admin` |
 
 ```ts
-// frontend-vue/src/tutor/types.ts（後端 models.rs 欄位一致，serde rename_all = "camelCase"）
+// frontend-vue/src/tutor/shared/types.ts（與後端 tutor/shared/dto.rs 欄位一致，serde rename_all = "camelCase"）
 interface QuestionView {           // 不含答案
   id: string; qtype: string; inputMode: 'choice'|'char_grid'|'free_canvas'|'image_canvas'|'text';
   section: string; stem: string; options: string[]; charCount?: number;
@@ -706,11 +777,11 @@ interface TutorReply {
 }
 ```
 
-`/answer` 處理順序：鎖 session → 驗證 `question_id` 為目前題目且 `q_state ∈ {asking, hinting}` → 手寫圖 base64 解碼存 `answers/<attempt_id>.png`（限制 ≤ 3MB、必須是 PNG magic bytes）→ 規則或 AI 批改 → 寫 `attempts` / `dialog_turns` → 狀態轉移 → 若題目結束更新 `mastery`/`concept_weakness` → 回 `TutorReply`。
+`/answer`（`features/answer.rs`）處理順序：鎖 session → `store::load_session` → 驗證 `question_id` 為目前題目且 `q_state ∈ {asking, hinting}` → 手寫圖 base64 解碼存 `answers/<attempt_id>.png`（限制 ≤ 3MB、必須是 PNG magic bytes）→ 規則批改（`domain::question::grade_choice`）或 AI 批改（`ai::turn::call_turn`）→ `session.apply_verdict()` 得 `Step` →（需要時）AI 教學 → 單一 transaction 寫 `attempts` / `dialog_turns` / `sessions`，若 `Step.outcome` 有值再寫 `mastery`/`concept_weakness`（`domain::progress`）→ 回 `TutorReply`。
 
 ---
 
-## 8. 前端（T-11 ~ T-14）
+## 8. 前端（T-13 ~ T-16）
 
 設計延續 jamie-exam：**遠距大字護眼**（題目 ≥ 32px、選項 ≥ 26px、米白暖色主題＋深色主題），全部操作有快捷鍵。Tutor 頁面獨立於現有 Console 的暗色 cyan 風格。
 
@@ -736,7 +807,7 @@ interface TutorReply {
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### HandwritingPad.vue（T-12）
+### HandwritingPad.vue（`features/tutor-session/`，T-14）
 
 - 移植 `C:\workspace\jamie-exam\web\canvas.js`（筆刷/橡皮擦/復原/米字格/底圖），改寫成 Vue SFC + TypeScript。
 - Pointer Events，支援壓感（`pressure`），`touch-action: none`。
@@ -769,7 +840,7 @@ interface TutorReply {
 | `TUTOR_AI_TIMEOUT_SECS` | `90` | |
 | `TUTOR_AI_CONCURRENCY` | `2` | |
 | `ANTIGRAVITY_CLI_BIN` | 自動偵測 | 沿用既有，agy adapter 的 program |
-| `TUTOR_CLI_BIN_<ID>` | 各 adapter 預設 | 覆寫某後端的執行檔路徑，例 `TUTOR_CLI_BIN_CLAUDE`；測試時指向 fake CLI |
+| `TUTOR_CLI_BIN_<ID>` | 各 adapter 預設 | 覆寫某後端的執行檔路徑，例 `TUTOR_CLI_BIN_CLAUDE`；測試時指向 fake CLI（由 `tutor/ai/backends.rs` 讀取後放進 `BackendConfig`） |
 
 ---
 
@@ -784,116 +855,137 @@ interface TutorReply {
 - 依 §6.1 方式呼叫 agy，prompt 要求「讀 ./answer.png，辨識文字，寫入 ./out/turn.json」。
 - 依序嘗試：(a) prompt 中寫 `./answer.png`；(b) `@answer.png` 引用語法；(c) 查 `agy --help` 是否有 `--image`/`--attach` 類參數。
 - 記錄：哪種方式成功、使用模型、平均延遲（跑 5 次）、token 量。
-- 若本機也裝了 `claude` / `gemini` / `codex`，用相同圖片各跑一次（指令見 §6.1），順便核對 §6.1 表格中的旗標，並各存一份 stdout 樣本到 `backend-rust/tests/fixtures/<id>_stream.txt`（T-08b 要用）。
+- 若本機也裝了 `claude` / `gemini` / `codex`，用相同圖片各跑一次（指令見 §6.1），順便核對 §6.1 表格中的旗標，並各存一份 stdout 樣本到 `backend-rust/crates/ai-cli/tests/fixtures/<id>_stream.txt`（T-07/T-08 要用）。
 - **產出**：在本文件末尾「附錄 A：探測結果」填寫結果（每個 CLI 一列）。若 agy 三種方式皆失敗 → agy 的 `vision=None`；若有其他 CLI 可看圖，建議將它設為 `TUTOR_AI_BACKENDS_VISION`。
 
-### Phase 1 — 後端基礎
+### Phase 1 — 核心域與資料層（不含 AI）
 
-**T-01　抽出 CLI 執行檔解析**（相依：無）
-- 新增 `backend-rust/src/executor/cli_bin.rs`：`pub fn resolve_cli_bin() -> String`，邏輯搬自 `runner.rs` 第 45~58 行；`runner.rs` 改呼叫它。行為不得改變。
-- 同檔新增 `pub fn which(program: &str) -> bool`（Windows 用 `where.exe`，其他用 `which`），給各 adapter 的 health check 判斷 `NotInstalled`。
+**T-01　DB**（相依：無）
+- `tutor/shared/schema.sql`（§3 原文）、`tutor/shared/db.rs`：`pub async fn open(data_dir: &Path) -> SqlitePool`（建立目錄、WAL、foreign_keys、執行 schema）。
+- 驗收：以 `:memory:` 開啟，查 `sqlite_master` 確認 11 張表。
 
-**T-02　Tutor DB**（相依：無）
-- `tutor/schema.sql`（§3 原文）、`tutor/db.rs`：`pub async fn open(data_dir: &Path) -> SqlitePool`（建立目錄、WAL、執行 schema）。
-- 驗收：單元測試以 `:memory:` 開啟並查詢 `sqlite_master` 確認 10 張表。
+**T-02　domain/question**（相依：無）
+- `Question`、`QType`、`InputMode`、`Answer`（值物件：`TrueFalse(bool)` / `Choice(usize)` / `Text(String)` / `Math{final, steps_hint}`）、`Verdict`、`BookRef`。
+- 純函式：`grade_choice(&Question, &ChoiceInput) -> Verdict`（`true_false` 接受 `"O"/"o"/"○"`、`"X"/"x"/"×"`；`single_choice` 接受 0-based int 或選項文字）、`answer_display(&Question) -> String`、`contains_answer(&Question, text) -> bool`（洩答檢查）、`normalize_import(raw) -> Result<Question>`（§4.1 轉換：1-based → 0-based、`input_mode` 推導、頁碼推導）。
+- 驗收：上述每個變體一個單元測試；`normalize_import` 以 `soc_01_mc_1`、`soc_01_map_1` 兩筆真實資料測試。
 
-**T-03　模型型別**（相依：T-02）
-- `tutor/models.rs`：`Question`（含答案，後端用）、`QuestionView`、`SessionView`、`TutorReply`、`BookRef`、`AiTurn`（§6.2，`verdict`/`action` 用 enum + `#[serde(rename_all="snake_case")]`）、`AnswerRequest`。
-- 驗收：`AiTurn` 反序列化測試（合法、缺欄位、未知 enum 值三種案例）。
-
-**T-04　匯入**（相依：T-02, T-03）
-- `tutor/import.rs`：依 §4.2。`pub async fn import_all(pool, root, data_dir) -> ImportStats`。
-- 驗收：對真實 `questions.json` 匯入後 `questions` = 54 筆；`soc_01_mc_1` 的 `answer_json` = `1`；`soc_01_map_1` 的 `book_page` = 3、`input_mode` = `image_canvas`；重跑一次筆數不變。
-
-**T-05　SRS**（相依：T-02）
-- `tutor/srs.rs`：純函式 `next_mastery(prev: Option<Mastery>, outcome: Outcome, now) -> Mastery`、`update_weakness(prev, outcome, now) -> Weakness`；DB 寫入函式另寫。`Outcome = FirstTry | AfterHint | Failed`。
+**T-03　domain/progress**（相依：無）
+- `Mastery`、`ConceptWeakness`、`Outcome(FirstTry|AfterHint|Failed)`；`next_mastery(prev: Option<Mastery>, outcome, now) -> Mastery`、`update_weakness(prev: Option<ConceptWeakness>, outcome, note, now) -> ConceptWeakness`。
 - 驗收：§5.1 表格每列一個單元測試。
 
-**T-06　規則批改**（相依：T-03）
-- `tutor/grading.rs`：`grade_choice(q, choice) -> Verdict`（`true_false` 比對 `"O"/"X"`，接受 `"o"`,`"○"`,`"x"`,`"×"`；`single_choice` 接受 0-based int 或選項文字）；`answer_display(q) -> String`。
-- 驗收：單元測試涵蓋上述變體。
+**T-04　domain/session**（相依：T-02, T-03）
+- `Session` 聚合（欄位對應 `sessions` 表）、`QState`、`TeachAction`、`Step`；方法：`current_question_id()`、`try_no()`、`apply_verdict(v, now) -> Step`、`can_next()`、`advance()`、`finish(now)`。
+- `select_queue(mode, candidates: &Candidates, n, seed) -> Vec<String>`（§5.2；`Candidates` 為 slice 查好的資料）。
+- 驗收（純單元測試，無 DB）：
+  1. 第一次答對 → `Step{action: Praise, reveal: true, outcome: Some(FirstTry)}`。
+  2. 錯兩次 → 第 1 次 `Hint`、無 reveal；第 2 次 `Explain`、reveal、`requeued=true`；同題第二輪再錯兩次 → `requeued=false`。
+  3. `Unreadable` → `try_no` 不變、`RetryUnreadable`。
+  4. `select_queue` 的 `review` 在候選為空時回空；`progress` 保持順序；`review` 同 seed 結果固定。
 
-### Phase 2 — AI 與引擎
+**T-05　store + shared**（相依：T-01~T-04）
+- `tutor/store.rs`：`load_session/save_session`、`load_progress(student_id, question_id)/save_progress`、`load_question`、`load_weaknesses(student_id, top)`；全部接受 `&mut SqliteConnection`（可在 transaction 內用）。
+- `tutor/shared/dto.rs`（§7 的 view 型別＋`From<&Question> for QuestionView`，**不含答案**）、`tutor/shared/error.rs`。
+- 驗收：`:memory:` 往返測試（save → load 相等）。
 
-**T-07　Prompt 組裝**（相依：T-03）
-- `tutor/prompts.rs`：`build_prompt(purpose, ctx) -> String`、`build_context_json(...) -> serde_json::Value`，模板依 §6.3。
-- 驗收：每種 purpose 一個測試：輸出包含 System 區塊與對應任務區塊；所有 `{placeholder}` 都已替換（輸出中不殘留 `{subject_name}` 這類樣板字）。
+**T-06　slice：bank_import**（相依：T-05）
+- `tutor/features/bank_import.rs`：依 §4.2；`POST /admin/import` 與 `pub async fn import_all(pool, root, data_dir) -> ImportStats`（啟動時若題庫為空自動呼叫一次）。
+- 驗收：對真實 `questions.json` 匯入後 `questions` = 54 筆；`soc_01_mc_1` 的 `answer_json` = `1`；`soc_01_map_1` 的 `book_page` = 3、`input_mode` = `image_canvas`；重跑一次筆數不變。
 
-**T-08a　AI 抽象層 + agy adapter**（相依：T-01, T-03, T-07, T-00）
-- 依 §6.0 建立 `tutor/ai/mod.rs`、`adapter.rs`、`cli_engine.rs`、`turn.rs`、`registry.rs`、`mock.rs`、`adapters/agy.rs`、`adapters/README.md`。新增依賴 `async-trait`。
+### Phase 2 — AI 引擎與防腐層
+
+**T-07　crates/ai-cli 核心 + agy adapter**（相依：T-00）
+- 建立 `backend-rust/crates/ai-cli`（library crate），`backend-rust/Cargo.toml` 加 path 依賴。檔案見 §2，型別見 §6.0。
+- 把 `executor/runner.rs` 第 45~58 行的 agy 偵測搬到 `adapters/agy.rs::resolve_agy_bin()`，`runner.rs` 改呼叫它（**行為不得改變**，runner 其餘不動）。`cli.rs` 提供 `which(program) -> bool`（Windows 用 `where.exe`）。
 - `AgyAdapter` 的 `vision` 依 T-00 結果設定。
-- `MockEngine`：建構時給一串 `Result<AiRawResult, AiError>`，每次 `run` 依序吐出，並記錄收到的 `AiInvocation`（供斷言 prompt 內容）。
-- `tests/fake_cli/`：小程式或 `.cmd`/`.sh` 腳本，讀環境變數 `FAKE_CLI_MODE`（`ok`/`badjson`/`timeout`/`exit1`），在 cwd 寫 `out/turn.json` 並輸出 agy 格式 NDJSON。以 `TUTOR_CLI_BIN_AGY` 指向它。
+- `MockEngine`：建構時給一串 `Result<AiRawResult, AiError>`，每次 `run` 依序吐出，並記錄收到的 `AiInvocation`。
+- `tests/fake_cli/`：小程式或 `.cmd`/`.sh`，讀 `FAKE_CLI_MODE`（`ok`/`badjson`/`timeout`/`exit1`），在 cwd 寫 `out/turn.json` 並輸出 agy 格式 NDJSON。
+- **crate 內不得出現**：sqlx、axum、任何 tutor 型別或中文教學文字。
 - 驗收：
-  1. `AgyAdapter::build_command` args 快照；`parse_line` 對 `tests/fixtures/agy_stream.txt` 的解析結果。
-  2. `CliEngine<AgyAdapter>` + fake CLI：`ok`/`badjson`/`timeout`/`exit1` 四種各一個整合測試。
-  3. `call_turn` + `MockEngine`：(a) 第一個 engine `Timeout`、第二個成功 → 回第二個結果且 `ai_calls` 有 2 筆；(b) 解析失敗重試 1 次；(c) `vision=None` 的 engine 在手寫用途被跳過；(d) `reads_files=false` 時 prompt 內含 context JSON。
+  1. `AgyAdapter::build_command` args 快照；`parse_line` 對 `tests/fixtures/agy_stream.txt`。
+  2. `CliEngine<AgyAdapter>` + fake CLI：四種模式各一個整合測試。
+  3. `call_json` + `MockEngine`：(a) 第一個 `Timeout`、第二個成功 → 回第二個結果、`CallRecord` 2 筆；(b) 解析失敗同 engine 重試 1 次；(c) 需要圖片時 `vision=None` 的 engine 被跳過。
+  4. `cargo build` 後 Console 呼叫 agy 的行為與改動前一致（手動跑一個既有任務）。
 
-**T-08b　其他 adapter**（相依：T-08a）
-- `adapters/claude_code.rs`、`gemini_cli.rs`、`codex.rs`、`generic.rs`（含 `ai_backends.toml` 解析，新增依賴 `toml`）。
+**T-08　crates/ai-cli 其他 adapter**（相依：T-07）
+- `adapters/claude_code.rs`、`gemini_cli.rs`、`codex.rs`、`generic.rs`（`ai_backends.toml` 解析）。
 - 先跑各 CLI `--help` 核對 §6.1 旗標，差異更新回本文件。
-- 驗收：每個 adapter 有 `build_command` 快照與 `parse_line` fixture 測試（fixture 來自 T-00；沒裝該 CLI 就手寫依文件格式的樣本並註明「未實測」）；`generic` 測 `{model_args}` 為空時整組移除、`{image_args}` 每張圖展開。
-- 本工單**不得**修改 `ai/` 以外的檔案。
+- 驗收：每個 adapter 有 `build_command` 快照與 `parse_line` fixture 測試（fixture 來自 T-00；沒裝該 CLI 就依文件手寫樣本並註明「未實測」）；`generic` 測 `{model_args}` 為空時整組移除、`{image_args}` 每張圖展開。
+- 本工單**只能**修改 `crates/ai-cli/` 內的檔案。
 
-**T-09　Engine**（相依：T-04~T-07, T-08a）
-- `tutor/engine.rs`：`create_session`、`build_queue`（§5.2）、`current_view`、`submit_answer`、`self_grade`、`student_message`、`next`、`end`；狀態機與覆寫規則依 §5；答案洩漏檢查。
-- engine 只透過 `registry.engines_for(purpose)` + `call_turn` 使用 AI，不得 import 任何 adapter。
-- 驗收（用 `MockEngine`）：
-  1. 選擇題答對 → 不呼叫 agy、`qState=revealed`、mastery box=1。
-  2. 選擇題錯兩次 → 第 1 次 `hinting` 且無 `reveal`；第 2 次 `explained` 有 `reveal`；題目被追加到 queue 尾端一次。
+**T-09　tutor/ai 防腐層**（相依：T-05, T-07）
+- `prompts.rs`：`build_prompt(purpose, ctx, caps) -> String`、`build_context_json(...)`，模板依 §6.3；`image_ref` / `output_instruction` / `context_instruction` 依能力表。
+- `turn.rs`：`AiTurn`（§6.2）、`TutorFeedback`、`call_turn()`（包 `ai_cli::call_json`，寫 `ai_calls`，洩答/頁碼 guard）、罐頭回覆（§6.4）。
+- `backends.rs`：讀 settings/環境變數 → `BackendConfig` → `ai_cli::Registry`；`engines_for(purpose)`；`reload()`。
+- 驗收：
+  1. 每種 purpose 的 prompt 測試：含 System 與任務區塊；無殘留 `{placeholder}`；`reads_files=false` 時內含 context JSON；`vision=AtMention` 時圖片寫成 `@answer.png`。
+  2. `AiTurn` 反序列化（合法、缺欄位、未知 enum 值）。
+  3. `call_turn` + `MockEngine`：AI 的 hint 內含答案字串 → `say` 被換成罐頭提示；AI 給錯頁碼 → 改為題目 `book_page`；`ai_calls` 有紀錄。
+
+### Phase 3 — 後端 slices
+
+> 每個 slice 一個檔、匯出 `routes()`；slice 間不互相 import（§1.1）。
+
+**T-10　基礎 slices＋組裝**（相依：T-05, T-09）
+- `students.rs`、`catalog.rs`、`assets.rs`（`canonicalize` 後必須仍在 `tutor_data/assets` 或 `tutor_data/answers` 底下）。
+- `tutor/mod.rs`：`TutorState { pool, data_dir, ai: Arc<Backends>, ai_sem, session_locks }`、`init()`（開 DB、題庫為空時匯入、建 registry、health check、清 `runs/`）、`routes()` 合併所有 slice；`main.rs` 掛到 `/api/tutor`（沿用 auth middleware）。
+- 驗收：`curl` 建學童、列科目、取一張插圖；`/assets/../tutor.db` 回 403/404。
+
+**T-11　教學 slices**（相依：T-10）
+- `start_session.rs`、`session_nav.rs`、`answer.rs`、`ask_tutor.rs`，依 §5、§7。
+- 驗收（`:memory:` + `MockEngine`）：
+  1. 選擇題答對 → 不呼叫 AI、`qState=revealed`、mastery box=1。
+  2. 選擇題錯兩次 → 第 1 次 `hinting` 無 `reveal`；第 2 次 `explained` 有 `reveal`；queue 尾端多一題。
   3. 手寫題 `unreadable` → `q_try` 不增加。
-  4. `review` 模式在無資料時回 `empty`。
-  5. 看圖清單為空時，手寫題送出 → 不呼叫 AI，回 `selfGradeAvailable=true`。
+  4. 看圖清單為空時手寫題 → 不呼叫 AI，回 `selfGradeAvailable=true`。
+  5. 同 session 並行兩個 `/answer` → 其一 409。
 
-**T-10　路由**（相依：T-09）
-- `tutor/routes.rs`：§7 全部端點（含 `/admin/ai/*`），掛在 `main.rs` 的 `/api/tutor`；`TutorState { pool, data_dir, ai: Arc<Registry>, ai_sem, session_locks }`。
-- `/assets/*`：`canonicalize` 後必須仍在 `tutor_data/assets` 或 `tutor_data/answers` 底下。
-- 驗收：`curl` 腳本跑完「建學童 → 匯入 → 開 session → 答題 → next → end → report」。
+**T-12　管理與報表 slices**（相依：T-10）
+- `report.rs`、`bank_admin.rs`、`ai_admin.rs`，依 §7。
+- 驗收：`curl` 腳本跑完「建學童 → 開 session → 答題 → next → end → report」；`PUT /admin/ai/backends` 帶未知 id 回 400。
 
-### Phase 3 — 前端
+### Phase 3b — 前端
 
-**T-11　路由與 API 層**（相依：T-10）
-- 安裝 `vue-router`；`/` 保持現有 Console，新增 `/tutor`、`/tutor/session/:id`、`/tutor/report/:studentId`、`/tutor/admin`。
-- `tutor/api.ts`（fetch 包裝，沿用現有 AuthFetch）、`tutor/types.ts`（§7）。
+**T-13　路由與共用層**（相依：T-10）
+- 安裝 `vue-router`；`/` 保持現有 Console（不搬動既有檔案），新增 `/tutor`、`/tutor/session/:id`、`/tutor/report/:studentId`、`/tutor/admin`。
+- `tutor/shared/http.ts`（fetch 包裝，沿用現有 AuthFetch）、`tutor/shared/types.ts`（§7）、`BigButton.vue`、`theme.css`（米白暖色／深色護眼主題）。
 
-**T-12　HandwritingPad**（相依：無，可與 T-11 並行）
-- 依 §8 規格。驗收：在平板/手寫板上能畫、清除、復原；`exportPng` 尺寸 ≤ 1024；`char_grid` 匯出無格線。
+**T-14　HandwritingPad**（相依：無，可與 T-13 並行）
+- 位於 `tutor/features/tutor-session/HandwritingPad.vue`，依 §8 規格。驗收：在平板/手寫板上能畫、清除、復原；`exportPng` 最長邊 ≤ 1024；`char_grid` 匯出無格線。
 
-**T-13　TutorSession 與元件**（相依：T-11, T-12）
-- `QuestionCard`、`BookRefCallout`（book_ref 出現時閃爍提示 2 秒）、`AnswerPanel`、`TutorBubble`、`TutorSession`。
+**T-15　feature：tutor-session**（相依：T-11, T-13, T-14）
+- `TutorSession.vue`、`useTutorSession.ts`（狀態與 API 呼叫）、`api.ts`、`QuestionCard`、`BookRefCallout`（book_ref 出現時閃爍提示 2 秒）、`AnswerPanel`、`TutorBubble`。
 - 快捷鍵：`Enter` 送出/下一題、`C` 清除、`Z` 復原、`1-4`/`O`/`X` 作答、`?` 開「我不懂」輸入框。
-- AI 呼叫中鎖定送出按鈕並顯示「老師想一下…」。`409` 時忽略。
-- 手寫題 `selfGradeAvailable` 時顯示標準答案疊圖與 ✅/❌。
+- AI 呼叫中鎖定送出按鈕並顯示「老師想一下…」；`409` 時忽略。手寫題 `selfGradeAvailable` 時顯示標準答案疊圖與 ✅/❌。
 
-**T-14　其餘頁面**（相依：T-11）
-- `StudentPicker`、`SessionSetup`、`ParentReport`、`QuestionAdmin`（§8）。
+**T-16　features：start / parent-report / admin**（相依：T-12, T-13）
+- `start/`（StudentPicker＋SessionSetup）、`parent-report/`、`admin/`（QuestionAdmin＋AiBackends），依 §8。
 
 ### Phase 4 — 題庫補強與新科目
 
-**T-15　書本頁碼/位置 AI 補強**（相依：T-08a, T-10）
-- 背景工作：對某科目每張掃描頁（非解答頁，檔名不含「解答」）透過 `call_json::<Vec<EnrichItem>>(registry.engines_for(EnrichPage), …)` 呼叫看圖用 AI 後端（`writes_files=false` 的後端改從回覆文字擷取 JSON），檔案放 `page.jpg` + `questions.json`（該科目 `book_page` 為 NULL 或 `book_where` 為空的題目，只含 id/stem/options）。
+**T-17　slice：bank_enrich（書本頁碼/位置 AI 補強）**（相依：T-09, T-12）
+- `tutor/features/bank_enrich.rs`：背景工作，對某科目每張掃描頁（檔名不含「解答」）呼叫 `ai_cli::call_json::<Vec<EnrichItem>>(backends.engines_for(EnrichPage), …)`；檔案放 `page.jpg` + `questions.json`（該科目 `book_page` 為 NULL 或 `book_where` 為空的題目，只含 id/stem/options）。enrich 專用 prompt 寫在本 slice 內（只有它用，不放 `ai/prompts.rs`）。
 - 任務 prompt：「找出哪些題目印在這一頁，以及在頁面的哪個位置（例如『左上第二大題』『右下角的地圖』），輸出 JSON：`[{"id":"...","where":"...","concept_tags":["..."]}]`」。
 - 只寫入 NULL/空欄位（不覆寫人工值），`book_page` = 掃描編號 + `page_offset`。
 - 驗收：社會科跑完後 `book_page IS NULL` 的題數下降；人工抽查 5 題位置描述正確。
 
-**T-16　新科目匯入管線（國文/數學）**（相依：T-15）
-- 掃描放 `jamie-exam/data/scans/{國文|數學}/`，題目頁＋解答頁成對交給看圖用 AI 後端（`engines_for(EnrichPage)`）萃取成 §4 的題目 JSON（新增 `math_expr`、`chinese_write`），輸出 `questions_{subject}.json` 後走 T-04 匯入。
-- 萃取結果**需人工在 QuestionAdmin 審核**（新增欄位 `source='ai_extract'`，審核後改 `active=1`；萃取時預設 `active=0`）。
+**T-18　新科目匯入管線（國文/數學）**（相依：T-17）
+- 掃描放 `jamie-exam/data/scans/{國文|數學}/`，題目頁＋解答頁成對交給看圖用 AI 後端萃取成 §4 的題目 JSON（新增 `math_expr`、`chinese_write`），輸出 `questions_{subject}.json` 後走 T-06 匯入。實作為 `bank_import.rs` 的擴充或新 slice `bank_extract.rs`（> 80 行就新開）。
+- 萃取結果**需人工在 QuestionAdmin 審核**（`source='ai_extract'`，萃取時預設 `active=0`，審核後改 `active=1`）。
 
 ### Phase 5 — 可選加值
 
-**T-17　語音**：`speechSynthesis`（`zh-TW`）朗讀 `say`；Chrome 下用 `webkitSpeechRecognition` 讓學童口說回答 `text`/`student_message`。設定頁可關閉。
-**T-18　家長通知**：session 結束摘要可匯出 / 列印。
-**T-19　HttpApiEngine（預留）**：直接呼叫模型 HTTP API 的 `AiEngine` 實作（圖片以 base64 內嵌，`reads_files/writes_files=false`），免 spawn、延遲較低。只需新增 `tutor/ai/http_engine.rs` 並在 registry 註冊。
-**T-20　既有 Console 改用 CliAdapter（可選）**：讓 `executor/runner.rs` 也透過 `CliAdapter::build_command/parse_line`，Console 即可切換不同 CLI。需另外處理 runner 的串流 log 與 git diff，獨立評估。
+**T-19　語音**：`speechSynthesis`（`zh-TW`）朗讀 `say`；Chrome 下用 `webkitSpeechRecognition` 讓學童口說回答 `text`/`student_message`。設定頁可關閉。放在 `tutor-session` feature 內。
+**T-20　家長通知**：session 結束摘要可匯出 / 列印（`parent-report` feature）。
+**T-21　HttpApiEngine（預留）**：在 `crates/ai-cli` 新增直接呼叫模型 HTTP API 的 `AiEngine` 實作（圖片以 base64 內嵌，`reads_files/writes_files=false`），免 spawn、延遲較低。只改 crate＋registry 註冊一行。
+**T-22　Console 改用 ai-cli（可選）**：讓 `executor/runner.rs` 透過 `ai_cli` 的 `CliAdapter::build_command/parse_line` 組指令與解析串流，Console 即可切換不同 CLI。需另外處理 runner 的串流 log 與 git diff，獨立評估。
 
 ---
 
 ## 11. 測試策略
 
-- **純邏輯**（srs、grading、prompts、import 正規化）：單元測試，不碰 agy。
-- **業務邏輯（engine）**：一律用 `MockEngine`，不 spawn 任何行程。
-- **CliEngine / adapter**：`build_command`、`parse_line` 純函式測試 + fixture；行程管理用 fake CLI（`TUTOR_CLI_BIN_<ID>`）。CI 不呼叫真 CLI。
+- **domain/**：純單元測試，無 DB、無 AI、無時間/亂數依賴（`now`、`seed` 由參數傳入）。這是測試密度最高的地方。
+- **slices**：SQLite `:memory:` + `MockEngine` 的整合測試，直接呼叫 handler 或用 `tower::ServiceExt::oneshot`。
+- **crates/ai-cli**：`build_command`、`parse_line` 純函式測試 + fixture；行程管理用 fake CLI（`TUTOR_CLI_BIN_<ID>`）。CI 不呼叫真 CLI。
 - **真 CLI 冒煙測試**：`cargo test -- --ignored real_cli_<id>`，手動跑；用 T-00 的探測圖片。
 - **前端**：手動驗收清單——遠距 2.5 公尺可讀、手寫板延遲無明顯拖影、AI 等待期間不可重複送出。
 
