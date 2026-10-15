@@ -9,11 +9,12 @@
 
 | # | 需求 | 設計對應 |
 |---|------|----------|
-| R1 | 以現有 agy（Antigravity CLI）當 AI 引擎 | 沿用 `backend-rust` 的 agy 呼叫方式，新增一次性呼叫包裝 `tutor/agy.rs` |
+| R1 | 以現有 agy（Antigravity CLI）當 AI 引擎 | 預設後端為 `AgyAdapter`，沿用 `backend-rust` 既有 agy 旗標 |
+| R9 | 預留相容各家 AI CLI 的空間 | `tutor/ai/`：`AiEngine` trait（業務層唯一依賴）＋ `CliAdapter` trait（每家 CLI 一個小 adapter），見 §6 |
 | R2 | AI 看題目帶學童複習，學童手上有實體書 | 題庫每題記錄 `book_page` / `book_where`，AI 可叫學童「翻到第 N 頁 某處」 |
 | R3 | 學童答題，AI 批改並教不會的地方 | 每題一個小型狀態機：作答 → 批改 → 提示 → 再答 → 講解 |
 | R4 | 圖片 AI 難以描述 → 叫學童看書 | 有圖的題目，prompt 強制要求以 `book_ref` 指引而非口述圖片 |
-| R5 | 國文/數學用手寫板，AI vision 看字、句子、算式 | 前端 Canvas 匯出 PNG → 後端存檔 → agy 讀圖批改 |
+| R5 | 國文/數學用手寫板，AI vision 看字、句子、算式 | 前端 Canvas 匯出 PNG → 後端存檔 → 具 vision 能力的 AI 後端讀圖批改 |
 | R6 | 記住不熟的地方，之後複習再拿出來問 | SQLite：`mastery`（每題 Leitner 間隔複習）+ `concept_weakness`（概念弱點） |
 | R7 | 輕量資料庫 | SQLite 單檔 `tutor.db`（WAL），沿用現有 `sqlx` |
 | R8 | 題目參考 `C:\workspace\jamie-exam\data` | 匯入 `jamie-exam/web/public/data/questions.json`（54 題）+ `crops/` 插圖 + `data/scans/` 掃描頁 |
@@ -46,24 +47,31 @@
 │                     │            │                                                     │
 │                     │            └─ tutor/srs.rs（Leitner 排程、弱點分數）              │
 │                     ├─ tutor/prompts.rs（組 prompt，純函式，可單元測試）                │
-│                     ├─ tutor/agy.rs（一次性呼叫 agy、讀回 out/turn.json、驗證 schema）  │
+│                     ├─ tutor/ai/  dyn AiEngine ◄── 業務層只認這個 trait               │
+│                     │     ├─ CliEngine<A: CliAdapter>（spawn/timeout/收集輸出/讀檔）   │
+│                     │     │    ├─ AgyAdapter（預設）  ├─ ClaudeCodeAdapter              │
+│                     │     │    ├─ GeminiCliAdapter    ├─ CodexAdapter                   │
+│                     │     │    └─ GenericAdapter（TOML 設定的任意 CLI）                │
+│                     │     ├─ FallbackEngine（依序嘗試多個 engine）                      │
+│                     │     └─ MockEngine（測試）／(未來) HttpApiEngine                   │
 │                     └─ tutor/db.rs（sqlx，tutor.db）                                    │
 └───────────────┬───────────────────────────────┬────────────────────────────────────────┘
                 │ spawn per turn                │
-        ┌───────▼────────┐              ┌───────▼───────┐
-        │ agy -p "<prompt>"│  cwd=       │ tutor.db      │
-        │ 讀 answer.png    │  tutor_data/ │ (SQLite WAL)  │
-        │ 寫 out/turn.json │  runs/<id>/  └───────────────┘
-        └──────────────────┘
+        ┌───────▼──────────────┐        ┌───────▼───────┐
+        │ <cli> … "<prompt>"     │ cwd=  │ tutor.db      │
+        │ 讀 answer.png          │ runs/ │ (SQLite WAL)  │
+        │ 寫 out/turn.json       │ <id>/ └───────────────┘
+        └────────────────────────┘
 ```
 
 ### 關鍵設計決策
 
-1. **AI 呼叫是無狀態的**：每次呼叫 agy 都由後端從 DB 組出完整上下文（題目、本題已發生的對話、學童弱點）。不依賴 agy 的對話記憶 → 重啟、換模型、換 CLI 都不影響。
-2. **能用規則批改就不叫 AI**：是非/選擇題由後端直接比對答案（毫秒回應）。**答對**用罐頭鼓勵語，**答錯**才叫 AI 教學。手寫/簡答題才需 AI 批改。這把 agy 呼叫次數與等待時間壓到最低。
+1. **AI 呼叫是無狀態的**：每次呼叫 AI 都由後端從 DB 組出完整上下文（題目、本題已發生的對話、學童弱點）。不依賴任何 CLI 的對話記憶 → 重啟、換模型、換 CLI 都不影響。
+2. **能用規則批改就不叫 AI**：是非/選擇題由後端直接比對答案（毫秒回應）。**答對**用罐頭鼓勵語，**答錯**才叫 AI 教學。手寫/簡答題才需 AI 批改。這把 AI 呼叫次數與等待時間壓到最低。
 3. **AI 只輸出結構化 JSON**：AI 決定「說什麼」與「建議動作」，但**狀態轉移由後端 engine 決定**（AI 的 `action` 只是建議，engine 會依嘗試次數覆寫）。避免 AI 失控跳題或洩答案。
 4. **答案不送到前端**：前端拿到的題目 view 不含 `answer`/`explanation`，直到 engine 決定揭曉。
-5. **與現有 Console 共存**：同一個 Rust 執行檔、同一個前端，新增 `/api/tutor/*` 與 `/tutor` 路由；Tutor 使用獨立的 `tutor.db`，不動既有 `antigravity_tasks.db`。
+5. **AI CLI 可抽換**：engine/routes 只依賴 `Arc<dyn AiEngine>`；各家 CLI 的差異（旗標、圖片傳法、輸出格式）全部收斂在 `CliAdapter` 的兩個純函式（組指令、解析輸出）。新增一家 CLI = 新增一個 adapter 檔案＋註冊一行，不動業務程式碼。
+6. **與現有 Console 共存**：同一個 Rust 執行檔、同一個前端，新增 `/api/tutor/*` 與 `/tutor` 路由；Tutor 使用獨立的 `tutor.db`，不動既有 `antigravity_tasks.db`。
 
 ---
 
@@ -72,7 +80,7 @@
 ```
 backend-rust/
   src/
-    executor/cli_bin.rs          # [T-01] 從 runner.rs 抽出 resolve_cli_bin()
+    executor/cli_bin.rs          # [T-01] 從 runner.rs 抽出 resolve_cli_bin()（agy 偵測）
     tutor/
       mod.rs                     # pub mod ...; pub struct TutorState
       schema.sql                 # [T-02] DDL，include_str! 載入
@@ -82,16 +90,27 @@ backend-rust/
       srs.rs                     # [T-05] Leitner 排程、弱點分數
       grading.rs                 # [T-06] 規則批改
       prompts.rs                 # [T-07] prompt 模板
-      agy.rs                     # [T-08] 一次性 agy 呼叫
+      ai/
+        mod.rs                   # [T-08a] AiEngine trait、AiInvocation、AiRawResult、Capabilities、AiError
+        cli_engine.rs            # [T-08a] CliEngine<A>：通用 spawn/timeout/輸出收集/讀 out/*.json
+        adapter.rs               # [T-08a] CliAdapter trait、CommandSpec、StreamItem
+        adapters/agy.rs          # [T-08a] AgyAdapter（預設）
+        adapters/claude_code.rs  # [T-08b]
+        adapters/gemini_cli.rs   # [T-08b]
+        adapters/codex.rs        # [T-08b]
+        adapters/generic.rs      # [T-08b] 由 ai_backends.toml 設定的任意 CLI
+        registry.rs              # [T-08a] 依設定建立 Arc<dyn AiEngine>、FallbackEngine
+        turn.rs                  # [T-08a] call_turn()：組檔案 → engine.run → 解析 AiTurn → 重試 → 寫 ai_calls
+        mock.rs                  # [T-08a] MockEngine（#[cfg(test)] 或 feature）
       engine.rs                  # [T-09] 狀態機、選題
       routes.rs                  # [T-10] Axum 路由
-  tests/fake_agy/                # [T-08] 假 agy（測試用），輸出固定 turn.json
+  tests/fake_cli/                # [T-08a] 假 CLI（測試 CliEngine 用），輸出固定 turn.json
 tutor_data/                      # 執行期資料（加入 .gitignore）
   tutor.db
   assets/<subject_id>/crops/*.png   # 匯入時複製
   assets/<subject_id>/scans/*.jpg   # 匯入時複製（給 AI 看整頁用）
   answers/<attempt_id>.png          # 學童手寫原圖（保留，給家長看）
-  runs/<call_id>/                   # agy 每次呼叫的工作目錄（7 天後清除）
+  runs/<call_id>/                   # AI CLI 每次呼叫的工作目錄（7 天後清除）
 frontend-vue/src/
   router.ts                      # [T-11] vue-router：/ (既有 Console)、/tutor/*
   tutor/
@@ -221,6 +240,8 @@ CREATE TABLE IF NOT EXISTS concept_weakness (   -- 概念層級弱點
 
 CREATE TABLE IF NOT EXISTS ai_calls (            -- 除錯 / 成本追蹤
   id           TEXT PRIMARY KEY,                  -- = runs/<id>
+  backend      TEXT NOT NULL,                     -- 'agy' | 'claude' | 'gemini' | 'codex' | <generic id>
+  model        TEXT,
   purpose      TEXT NOT NULL,                     -- 'grade_handwriting' | 'tutor_wrong' | 'student_message' | 'enrich_page'
   session_id   TEXT,
   question_id  TEXT,
@@ -230,6 +251,12 @@ CREATE TABLE IF NOT EXISTS ai_calls (            -- 除錯 / 成本追蹤
   raw_output   TEXT,                              -- turn.json 原文或 stdout 尾端 4KB
   input_tokens INTEGER, output_tokens INTEGER,
   created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (            -- 執行期可調設定（AI 後端清單等）
+  key        TEXT PRIMARY KEY,                    -- 'ai_backends' | 'ai_backends_vision'
+  value      TEXT NOT NULL,                       -- 例 'agy,claude'
+  updated_at TEXT NOT NULL
 );
 ```
 
@@ -320,27 +347,226 @@ ASKING ──answer──► 批改
 
 ---
 
-## 6. agy 呼叫規格（T-08）
+## 6. AI 引擎抽象層與呼叫規格（T-08a / T-08b）
 
-### 6.1 呼叫方式
+### 6.0 分層與 trait 設計
 
 ```
-cwd   = tutor_data/runs/<call_id>/            （每次新建，裡面只放這次需要的檔案）
-files = context.json                           （題目＋對話＋弱點，給 AI 參考）
-        question.png   （若題目有 image_path，複製）
-        answer.png     （若學童手寫）
-        page.jpg       （僅 enrich 用）
-cmd   = <resolve_cli_bin()> --dangerously-skip-permissions --output-format stream-json
-        [--model <TUTOR_MODEL>] -p "<prompt>"
-stdin = null；timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
-輸出  = AI 必須寫入 ./out/turn.json
+engine.rs / routes.rs
+      │  只呼叫 ai::turn::call_turn(engines, …)
+      ▼
+┌──────────────────────── trait AiEngine ────────────────────────┐  ← 業務層唯一依賴
+│ CliEngine<A: CliAdapter>   MockEngine   (未來) HttpApiEngine     │
+└──────────┬─────────────────────────────────────────────────────┘
+           │ CliEngine 負責「所有 CLI 共通」的事：建 run 目錄、spawn、timeout、
+           │ 收 stdout/stderr、讀 out/*.json、kill_on_drop
+           ▼
+┌──────────────────────── trait CliAdapter ──────────────────────┐  ← 每家 CLI 的差異只在這
+│ AgyAdapter  ClaudeCodeAdapter  GeminiCliAdapter  CodexAdapter    │
+│ GenericAdapter（由 TOML 設定任意 CLI）                            │
+│ 核心只有兩個純函式：build_command()、parse_line() → 不碰 I/O，好寫好測 │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-- 讀取順序：① `out/turn.json` ② 若無，從 stdout stream-json 的 `/result/response` 取文字，擷取第一個 `{` 到最後一個 `}` 解析。
-- 解析後用 serde 嚴格反序列化成 `AiTurn`（§6.2）；失敗 → **重試 1 次**（prompt 後加「上次輸出不是合法 JSON，請只輸出 JSON」）；再失敗 → engine 使用罐頭回覆（§6.4），`ai_calls.ok=0`。
-- token usage：照 `runner.rs` 的 pointer（`/result/usage`、`/step_update/usage`、`/usage`）擷取，寫入 `ai_calls`。
-- 同一 session 同時只允許一個 AI 呼叫（`DashMap<session_id, ()>` 當鎖）；重複請求回 `409`。全域 `Semaphore(TUTOR_AI_CONCURRENCY=2)`。
+**兩層 trait 的理由**：`AiEngine` 讓「不是 CLI 的東西」（直接打 HTTP API、測試替身）也能接上；`CliAdapter` 讓新增一家 CLI 只要寫「怎麼組指令、怎麼讀輸出」，不必重寫行程管理。多後端容錯由 `call_turn` 依序嘗試 `Vec<Arc<dyn AiEngine>>` 完成（見下方），因為每換一個後端都要依它的能力**重新組 prompt**。
+
+#### `tutor/ai/mod.rs`
+
+```rust
+/// 這家後端能做什麼。prompts.rs 與 engine.rs 依此調整行為。
+#[derive(Debug, Clone, Serialize)]
+pub struct Capabilities {
+    pub vision: VisionMode,          // 能否看圖、圖怎麼給
+    pub reads_files: bool,           // 能否自行讀 cwd 內的檔案（context.json）
+    pub writes_files: bool,          // 能否把結果寫成 ./out/turn.json
+    pub max_prompt_chars: usize,     // 超過時 prompts.rs 要裁短
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum VisionMode {
+    None,                            // 不能看圖 → 手寫題自動改走「自評」
+    PromptPath,                      // 在 prompt 寫 "./answer.png"，CLI 自己用讀檔工具開
+    AtMention,                       // 在 prompt 寫 "@answer.png"
+    Flag { flag: String },           // 每張圖加一組 `<flag> <path>`，例 codex 的 "-i"
+}
+
+pub struct AiInvocation {
+    pub call_id: String,             // = runs/<call_id>
+    pub purpose: AiPurpose,          // GradeHandwriting | TutorWrong | StudentMessage | EnrichPage
+    pub prompt: String,              // 已依 capabilities 組好（圖片引用方式已套用）
+    pub files: Vec<RunFile>,         // 放進 run 目錄的檔案
+    pub images: Vec<String>,         // files 中哪些是圖片（相對檔名），給 Flag 模式用
+    pub expect_output_file: Option<String>, // 例 Some("out/turn.json")
+    pub model: Option<String>,
+    pub timeout: Duration,
+}
+pub struct RunFile { pub name: String, pub bytes: Vec<u8> }
+
+pub struct AiRawResult {
+    pub backend_id: String,
+    pub output_file: Option<String>, // expect_output_file 的內容（若有）
+    pub final_text: Option<String>,  // CLI 最終回覆文字
+    pub usage: Option<TokenUsage>,   // 沿用 models::protocol::TokenUsage
+    pub duration: Duration,
+    pub stderr_tail: String,         // 最後 4KB，除錯用
+}
+
+#[derive(Debug)]                     // 手寫 Display，不新增 thiserror 依賴
+pub enum AiError {
+    NotInstalled(String), Spawn(String), Timeout,
+    NonZeroExit { code: Option<i32>, stderr_tail: String },
+    EmptyOutput, Unsupported(String),
+}
+
+#[async_trait::async_trait]          // 新增依賴 async-trait = "0.1"（dyn trait 需要）
+pub trait AiEngine: Send + Sync {
+    fn id(&self) -> &str;                          // "agy" | "claude" | ...
+    fn capabilities(&self) -> &Capabilities;
+    fn model(&self) -> Option<String>;             // 此後端設定的 model
+    async fn health_check(&self) -> Result<String, AiError>; // 跑 `--version`，回版本字串
+    async fn run(&self, inv: AiInvocation) -> Result<AiRawResult, AiError>;
+}
+```
+
+#### `tutor/ai/adapter.rs`
+
+```rust
+pub struct CommandSpec {
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub stdin: Option<String>,       // 有些 CLI 可從 stdin 吃 prompt（避開 Windows 命令列長度上限）
+}
+
+pub enum StreamItem { TextDelta(String), FinalText(String), Usage(TokenUsage), Ignore }
+
+pub trait CliAdapter: Send + Sync + 'static {
+    fn id(&self) -> &'static str;
+    fn default_program(&self) -> String;            // agy 用 executor::cli_bin::resolve_cli_bin()
+    fn capabilities(&self) -> Capabilities;
+    fn version_args(&self) -> Vec<String> { vec!["--version".into()] }
+    /// 純函式：依 invocation 組出指令（cwd 由 CliEngine 設為 run 目錄）
+    fn build_command(&self, program: &str, inv: &AiInvocation, run_dir: &Path) -> CommandSpec;
+    /// 純函式：解析 stdout 的一行
+    fn parse_line(&self, line: &str) -> StreamItem;
+}
+```
+
+`CliEngine<A>::run()` 固定流程：
+1. 建 `runs/<call_id>/` 與 `runs/<call_id>/out/`，寫入 `files`。
+2. `adapter.build_command(...)` → `tokio::process::Command`，`current_dir(run_dir)`、`kill_on_drop(true)`；stdin 依 `CommandSpec.stdin`（None 則 `Stdio::null()`）。
+3. 逐行讀 stdout 丟給 `parse_line`：累積 `TextDelta`；`FinalText` 覆蓋；`Usage` 記下。stderr 只留尾端 4KB。
+4. `timeout` 到 → kill → `AiError::Timeout`；program 找不到 → `NotInstalled`；非 0 結束且無任何輸出 → `NonZeroExit`。
+5. 讀 `expect_output_file`（存在才讀）→ 組 `AiRawResult`。`final_text` = FinalText ?? 累積的 TextDelta。
+
+#### `tutor/ai/turn.rs`（業務層入口，與哪家 CLI 無關）
+
+```rust
+/// 泛型版本：任何「要 AI 回一個 JSON」的用途都走這裡（T-15 enrich、T-16 萃取題目）
+pub async fn call_json<T: DeserializeOwned>(engines, purpose, prompt_builder, files, images, output_file: &str, db, cfg)
+    -> Result<(T, CallMeta), AiError>;
+
+/// 教學對話專用：call_json::<AiTurn> + 依 purpose 組 prompt
+pub async fn call_turn(
+    engines: &[Arc<dyn AiEngine>],   // registry 依用途給的清單，依序容錯
+    purpose: AiPurpose, ctx: &PromptContext,
+    files: Vec<RunFile>, images: Vec<String>,
+    db: &SqlitePool, cfg: &AiConfig,
+) -> Result<(AiTurn, CallMeta), AiError>
+```
+
+對清單中每個 engine：
+1. 若 `purpose` 需要看圖而 `capabilities().vision == None` → 跳過此 engine。
+2. `prompts::build_prompt(purpose, ctx, engine.capabilities())` → `engine.run()`。
+3. 解析：① `output_file` ② `final_text` 中第一個 `{` 到最後一個 `}` → serde 成 `AiTurn`。解析失敗在**同一 engine** 重試 1 次（prompt 加「上次輸出不是合法 JSON，請只輸出 JSON」）。
+4. `NotInstalled / Spawn / Timeout / NonZeroExit / EmptyOutput` 或兩次解析失敗 → 換下一個 engine。
+5. 每次呼叫寫一筆 `ai_calls`（含 `backend` 欄位）。
+
+全部失敗回 `Err`，engine.rs 改用罐頭回覆（§6.4）；若是因為沒有任何具 vision 的後端，回 `selfGradeAvailable=true`。
+
+#### 能力驅動的行為（prompts.rs / engine.rs 必須遵守）
+
+| Capability | 為 true / 有值 | 為 false / None |
+|---|---|---|
+| `reads_files` | prompt 寫「請先讀 ./context.json」 | 把 context.json 內容**直接貼進 prompt**（json 區塊） |
+| `writes_files` | 要求寫 `./out/turn.json` | 要求「只輸出一個 JSON 物件，不要其他文字」，從 `final_text` 擷取 |
+| `vision` | `PromptPath`→`./answer.png`、`AtMention`→`@answer.png`、`Flag`→prompt 寫「附件圖片 answer.png」並由 adapter 加旗標 | `None`：手寫題不送此後端；題目插圖不提供 |
+| `max_prompt_chars` | — | 超過時依序裁掉：dialog 舊訊息 → weak_concepts → explanation |
+
+`prompts.rs` 提供 `fn image_ref(caps: &Capabilities, file: &str) -> String`，模板中所有圖片檔名都經由它輸出，**模板內不得寫死 `./answer.png`**；同理 `fn output_instruction(caps)`、`fn context_instruction(caps, ctx_json)`。
+
+### 6.1 各家 Adapter 規格
+
+> ⚠ 除 agy（已在本 repo `runner.rs` 使用）外，其餘旗標依各 CLI 公開文件撰寫，**實作 T-08b 時必須先跑 `<cli> --help` 核對**；不符就以實測為準，並更新本表。
+
+| id | 預設 program | 指令（`{p}`=prompt，`{m}`=model） | vision | reads / writes | 輸出解析 |
+|---|---|---|---|---|---|
+| `agy`（預設） | `resolve_cli_bin()`（`agy`→`antigravity`） | `--dangerously-skip-permissions --output-format stream-json [--model {m}] -p {p}` | 依 T-00 結果（預期 `PromptPath`） | ✅ / ✅ | NDJSON：`/step_update/text_delta`→TextDelta、`/result/response`→FinalText、`/result/usage`｜`/step_update/usage`｜`/usage`→Usage（同 runner.rs） |
+| `claude` | `claude` | `-p {p} --output-format stream-json --verbose --dangerously-skip-permissions [--model {m}]` | `PromptPath` | ✅ / ✅ | NDJSON：`type=="result"` 的 `/result`→FinalText、`/usage`→Usage |
+| `gemini` | `gemini` | `-p {p} --yolo [-m {m}]`（若版本支援 `--output-format json` 則加上） | `AtMention` | ✅ / ✅ | 純文字：每行 TextDelta；JSON 模式取 `/response` |
+| `codex` | `codex` | `exec --full-auto --skip-git-repo-check [-m {m}] [-i <img>]… {p}` | `Flag{"-i"}` | ✅ / ✅ | 純文字 → TextDelta |
+| `generic` | 設定檔 | 設定檔模板 | 設定檔 | 設定檔 | `line_mode = text \| ndjson` + JSON pointer |
+
+Windows 注意：命令列長度上限約 32K 字元。prompt **超過 8000 字元**時，adapter 若支援 stdin 就改走 stdin；否則 `reads_files` 必須為 true（context 放檔案，prompt 保持短）。
+
+#### `GenericAdapter` 設定檔：`tutor_data/ai_backends.toml`
+
+不寫 Rust 也能接新 CLI（新增依賴 `toml = "0.8"`）：
+
+```toml
+[[backend]]
+id = "my-cli"
+program = "mycli"
+args = ["run", "--yes", "{model_args}", "{image_args}", "--prompt", "{prompt}"]
+model_args = ["--model", "{model}"]     # model 為空時整組移除
+image_args = ["--attach", "{image}"]    # 每張圖展開一次；vision 不是 flag 時忽略
+vision = "flag"                         # none | prompt_path | at_mention | flag
+reads_files = true
+writes_files = true
+max_prompt_chars = 30000
+prompt_via_stdin = false                # true 時 {prompt} 不放 args，改寫入 stdin
+line_mode = "ndjson"                    # text | ndjson
+final_text_pointer = "/result"          # 僅 ndjson
+text_delta_pointer = "/delta"
+usage_pointer = "/usage"
+version_args = ["--version"]
+```
+
+`args` 中的 `{model_args}` / `{image_args}` 是**整組展開**的佔位元素；其他字串內的 `{prompt}`、`{model}`、`{image}` 做文字替換。不經過 shell（直接 `Command::new`），不支援管線或重導向。
+
+#### `tutor/ai/registry.rs`：選擇後端
+
+- 設定來源優先序：DB `settings` 表（管理頁可即時切換）> 環境變數 > 預設 `"agy"`。
+- `ai_backends`（環境變數 `TUTOR_AI_BACKENDS`）：逗號分隔清單，例 `agy,claude` → 依序容錯。
+- `ai_backends_vision`（`TUTOR_AI_BACKENDS_VISION`）：看圖用途（手寫批改、enrich）專用清單；未設定則同主清單。例：平常用便宜的 A，看圖用 B。
+- 內建 id：`agy`、`claude`、`gemini`、`codex`；其他 id 到 `ai_backends.toml` 找；找不到 → log 警告並略過。
+- 每個後端的 model：`TUTOR_MODEL_<ID 大寫，`-`→`_`>`（例 `TUTOR_MODEL_AGY`），未設定用 CLI 預設。
+- 啟動時對每個後端跑 `health_check()`，結果存記憶體；`NotInstalled` 的後端從清單移除。清單變成空的 → 啟動不失敗，所有 AI 功能走罐頭/自評，並在管理頁顯示警告。
+- 對外提供：`fn engines_for(&self, purpose: AiPurpose) -> Vec<Arc<dyn AiEngine>>`；以 `ArcSwap` 或 `RwLock` 持有，`PUT /admin/ai/backends` 時重建。
+
+#### 新增一家 CLI 的步驟（寫進 `tutor/ai/adapters/README.md`）
+
+1. 複製 `adapters/agy.rs` 為 `adapters/<id>.rs`，實作 `CliAdapter`。
+2. 在 `registry.rs` 的 `match id { … }` 加一行。
+3. 單元測試：`build_command` 的 args 快照；`parse_line` 餵真實輸出樣本 `tests/fixtures/<id>_stream.txt`。
+4. 冒煙：`cargo test -- --ignored real_cli_<id>`。
+5. **不得**修改 engine.rs、prompts.rs、routes.rs；若非改不可，代表抽象漏了 → 回報，不要硬改。
+
+### 6.1b 呼叫共通規則
+
+```
+cwd     = tutor_data/runs/<call_id>/          （每次新建，只放這次需要的檔案）
+files   = context.json                         （題目＋對話＋弱點）
+          question.png   （題目有 image_path 且 vision≠None 時）
+          answer.png     （學童手寫）
+          page.jpg       （僅 enrich）
+輸出    = writes_files ? ./out/turn.json : 最終回覆文字中的 JSON
+timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
+```
+
+- 同一 session 同時只允許一個 AI 呼叫（`DashMap<session_id, ()>` 當鎖）；重複請求回 `409`。全域 `Semaphore(TUTOR_AI_CONCURRENCY=2)`，跨所有後端共用。
 - `runs/` 下超過 7 天的目錄於啟動時刪除。
+- 安全：各家「跳過權限確認」旗標（`--dangerously-skip-permissions`、`--yolo`、`--full-auto`）只在 `runs/<id>/` 內執行；run 目錄不放 DB、其他學童資料或任何 secret。
 
 ### 6.2 AI 輸出 JSON（`AiTurn`）
 
@@ -370,19 +596,24 @@ stdin = null；timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
 
 規則：
 1. 用繁體中文、國小{grade}年級聽得懂的話，句子短，2~4 句。多鼓勵，不要說「你錯了」，改說「差一點點」。
-2. 題目有圖（./question.png）時，你可以看圖理解，但「不要用文字描述圖片細節」；
+2. 題目有圖（{question_image}）時，你可以看圖理解，但「不要用文字描述圖片細節」；
    需要學童看圖時，用 book_ref 叫學童翻到課本第幾頁的哪個位置，say 裡也要說出頁碼與位置。
 3. 給提示（hint）時絕對不能說出正確答案或答案中的字。
-4. 檔案 ./context.json 有題目、正確答案、解析、這題之前的對話、學童過去的弱點，請先讀它。
-5. 只把結果以 JSON 寫入 ./out/turn.json（UTF-8），格式如下，不要輸出其他檔案：
+4. {context_instruction}
+5. {output_instruction}
 {AI_TURN_SCHEMA}
 ```
+
+佔位字由 `prompts.rs` 依 `Capabilities` 產生（§6.0 能力驅動表）：
+- `{question_image}` = `image_ref(caps, "question.png")`；題目無圖或 `vision=None` 時，整條規則 2 改為「這題的圖請一律用 book_ref 叫學童看課本」。
+- `{context_instruction}`：`reads_files` → 「檔案 ./context.json 有題目、正確答案、解析、這題之前的對話、學童過去的弱點，請先讀它。」；否則 → 「以下是題目、正確答案、解析、之前的對話與學童弱點：」+ json 區塊。
+- `{output_instruction}`：`writes_files` → 「只把結果以 JSON 寫入 ./out/turn.json（UTF-8），格式如下，不要輸出其他檔案：」；否則 → 「只輸出一個 JSON 物件，不要有任何其他文字或 markdown，格式如下：」。
 
 各用途的任務區塊（接在 System 後）：
 
 - **`grade_handwriting`**（手寫題批改＋教學，一次呼叫完成）：
   ```
-  任務：./answer.png 是學童用手寫板寫的答案。
+  任務：{answer_image} 是學童用手寫板寫的答案。（{answer_image} = image_ref(caps, "answer.png")）
   1. 先辨識手寫內容填入 recognized_text；字跡無法辨識時 verdict=unreadable，請學童寫大一點、慢一點。
   2. 與正確答案比對給 verdict。{qtype_specific}
   3. 這是第 {try_no} 次作答。答對 → action=praise，簡短說明為什麼對。
@@ -447,6 +678,9 @@ stdin = null；timeout = TUTOR_AI_TIMEOUT_SECS（預設 90）
 | POST | `/admin/import` | `{root?}` | `{subjects, units, questions}` 計數 |
 | GET/PATCH | `/admin/questions/:id` | `{book_page?, book_where?, concept_tags?, active?}` | Question（含答案） |
 | POST | `/admin/enrich` | `{subject_id}` | `{job_started:true}`（背景執行，T-15） |
+| GET | `/admin/ai/backends` | | `{available:[{id, version?, healthy, capabilities, model?}], active:["agy",...], activeVision:[...]}` |
+| PUT | `/admin/ai/backends` | `{active:["agy","claude"], activeVision?:[...]}` | 同上；寫入 `settings` 並重建 registry；未知或不健康的 id 回 400 |
+| POST | `/admin/ai/test` | `{backend_id, with_image: bool}` | 用固定測試題跑一次 `call_turn`，回 `{ok, durationMs, turn?, error?}`（管理頁「測試連線」按鈕） |
 
 ```ts
 // frontend-vue/src/tutor/types.ts（後端 models.rs 欄位一致，serde rename_all = "camelCase"）
@@ -518,6 +752,7 @@ interface TutorReply {
 - `SessionSetup.vue`：選科目 → 選模式（📖 循序 / 🎯 弱點複習（顯示待複習數）/ 🔀 混合）→ 選單元（循序時）。
 - `ParentReport.vue`：弱點概念排行、待複習數、最近錯題（含學童手寫原圖、AI 辨識結果、AI 的 misconception）。
 - `QuestionAdmin.vue`：表格列出題目，可編輯 `book_page`、`book_where`、`concept_tags`、`active`；可點開掃描頁對照。
+  另有「AI 後端」分頁：列出偵測到的 CLI（版本、是否支援看圖）、拖曳排序主清單與看圖清單、「測試連線」按鈕。
 
 ---
 
@@ -527,10 +762,14 @@ interface TutorReply {
 |---|---|---|
 | `TUTOR_DATA_DIR` | `./tutor_data` | 執行期資料根目錄 |
 | `TUTOR_IMPORT_ROOT` | `C:\workspace\jamie-exam` | 匯入來源 |
-| `TUTOR_MODEL` | （空，用 agy 預設） | 傳給 `--model`；需要 vision 能力的模型 |
+| `TUTOR_AI_BACKENDS` | `agy` | 主後端清單（逗號分隔，依序容錯）；DB `settings` 有值時以 DB 為準 |
+| `TUTOR_AI_BACKENDS_VISION` | （同主清單） | 看圖用途的後端清單 |
+| `TUTOR_MODEL_<ID>` | （空，用 CLI 預設） | 各後端 model，例 `TUTOR_MODEL_AGY`、`TUTOR_MODEL_CLAUDE` |
+| `TUTOR_AI_BACKENDS_FILE` | `<TUTOR_DATA_DIR>/ai_backends.toml` | GenericAdapter 設定檔 |
 | `TUTOR_AI_TIMEOUT_SECS` | `90` | |
 | `TUTOR_AI_CONCURRENCY` | `2` | |
-| `ANTIGRAVITY_CLI_BIN` | 自動偵測 | 沿用既有；測試時指向 fake agy |
+| `ANTIGRAVITY_CLI_BIN` | 自動偵測 | 沿用既有，agy adapter 的 program |
+| `TUTOR_CLI_BIN_<ID>` | 各 adapter 預設 | 覆寫某後端的執行檔路徑，例 `TUTOR_CLI_BIN_CLAUDE`；測試時指向 fake CLI |
 
 ---
 
@@ -545,12 +784,14 @@ interface TutorReply {
 - 依 §6.1 方式呼叫 agy，prompt 要求「讀 ./answer.png，辨識文字，寫入 ./out/turn.json」。
 - 依序嘗試：(a) prompt 中寫 `./answer.png`；(b) `@answer.png` 引用語法；(c) 查 `agy --help` 是否有 `--image`/`--attach` 類參數。
 - 記錄：哪種方式成功、使用模型、平均延遲（跑 5 次）、token 量。
-- **產出**：在本文件末尾「附錄 A：探測結果」填寫結果。若三種皆失敗 → 停止並回報（後續手寫題只能走「自評」模式）。
+- 若本機也裝了 `claude` / `gemini` / `codex`，用相同圖片各跑一次（指令見 §6.1），順便核對 §6.1 表格中的旗標，並各存一份 stdout 樣本到 `backend-rust/tests/fixtures/<id>_stream.txt`（T-08b 要用）。
+- **產出**：在本文件末尾「附錄 A：探測結果」填寫結果（每個 CLI 一列）。若 agy 三種方式皆失敗 → agy 的 `vision=None`；若有其他 CLI 可看圖，建議將它設為 `TUTOR_AI_BACKENDS_VISION`。
 
 ### Phase 1 — 後端基礎
 
 **T-01　抽出 CLI 執行檔解析**（相依：無）
 - 新增 `backend-rust/src/executor/cli_bin.rs`：`pub fn resolve_cli_bin() -> String`，邏輯搬自 `runner.rs` 第 45~58 行；`runner.rs` 改呼叫它。行為不得改變。
+- 同檔新增 `pub fn which(program: &str) -> bool`（Windows 用 `where.exe`，其他用 `which`），給各 adapter 的 health check 判斷 `NotInstalled`。
 
 **T-02　Tutor DB**（相依：無）
 - `tutor/schema.sql`（§3 原文）、`tutor/db.rs`：`pub async fn open(data_dir: &Path) -> SqlitePool`（建立目錄、WAL、執行 schema）。
@@ -578,22 +819,34 @@ interface TutorReply {
 - `tutor/prompts.rs`：`build_prompt(purpose, ctx) -> String`、`build_context_json(...) -> serde_json::Value`，模板依 §6.3。
 - 驗收：每種 purpose 一個測試：輸出包含 System 區塊與對應任務區塊；所有 `{placeholder}` 都已替換（輸出中不殘留 `{subject_name}` 這類樣板字）。
 
-**T-08　agy 包裝**（相依：T-01, T-03, T-00）
-- `tutor/agy.rs`：`pub async fn call(purpose, run_files: Vec<(String, Vec<u8>)>, prompt) -> Result<(AiTurn, CallMeta), AiError>`，依 §6.1（含重試 1 次、usage 擷取、寫 `ai_calls`）。
-- 依 T-00 結果決定圖片引用方式。
-- `tests/fake_agy/`：一個小程式或 `.cmd`/`.sh` 腳本，讀環境變數 `FAKE_AGY_MODE`（`ok`/`badjson`/`timeout`）在 cwd 寫 `out/turn.json`。整合測試以 `ANTIGRAVITY_CLI_BIN` 指向它。
-- 驗收：三種模式各一個整合測試。
+**T-08a　AI 抽象層 + agy adapter**（相依：T-01, T-03, T-07, T-00）
+- 依 §6.0 建立 `tutor/ai/mod.rs`、`adapter.rs`、`cli_engine.rs`、`turn.rs`、`registry.rs`、`mock.rs`、`adapters/agy.rs`、`adapters/README.md`。新增依賴 `async-trait`。
+- `AgyAdapter` 的 `vision` 依 T-00 結果設定。
+- `MockEngine`：建構時給一串 `Result<AiRawResult, AiError>`，每次 `run` 依序吐出，並記錄收到的 `AiInvocation`（供斷言 prompt 內容）。
+- `tests/fake_cli/`：小程式或 `.cmd`/`.sh` 腳本，讀環境變數 `FAKE_CLI_MODE`（`ok`/`badjson`/`timeout`/`exit1`），在 cwd 寫 `out/turn.json` 並輸出 agy 格式 NDJSON。以 `TUTOR_CLI_BIN_AGY` 指向它。
+- 驗收：
+  1. `AgyAdapter::build_command` args 快照；`parse_line` 對 `tests/fixtures/agy_stream.txt` 的解析結果。
+  2. `CliEngine<AgyAdapter>` + fake CLI：`ok`/`badjson`/`timeout`/`exit1` 四種各一個整合測試。
+  3. `call_turn` + `MockEngine`：(a) 第一個 engine `Timeout`、第二個成功 → 回第二個結果且 `ai_calls` 有 2 筆；(b) 解析失敗重試 1 次；(c) `vision=None` 的 engine 在手寫用途被跳過；(d) `reads_files=false` 時 prompt 內含 context JSON。
 
-**T-09　Engine**（相依：T-04~T-08）
+**T-08b　其他 adapter**（相依：T-08a）
+- `adapters/claude_code.rs`、`gemini_cli.rs`、`codex.rs`、`generic.rs`（含 `ai_backends.toml` 解析，新增依賴 `toml`）。
+- 先跑各 CLI `--help` 核對 §6.1 旗標，差異更新回本文件。
+- 驗收：每個 adapter 有 `build_command` 快照與 `parse_line` fixture 測試（fixture 來自 T-00；沒裝該 CLI 就手寫依文件格式的樣本並註明「未實測」）；`generic` 測 `{model_args}` 為空時整組移除、`{image_args}` 每張圖展開。
+- 本工單**不得**修改 `ai/` 以外的檔案。
+
+**T-09　Engine**（相依：T-04~T-07, T-08a）
 - `tutor/engine.rs`：`create_session`、`build_queue`（§5.2）、`current_view`、`submit_answer`、`self_grade`、`student_message`、`next`、`end`；狀態機與覆寫規則依 §5；答案洩漏檢查。
-- 驗收（用 fake agy）：
+- engine 只透過 `registry.engines_for(purpose)` + `call_turn` 使用 AI，不得 import 任何 adapter。
+- 驗收（用 `MockEngine`）：
   1. 選擇題答對 → 不呼叫 agy、`qState=revealed`、mastery box=1。
   2. 選擇題錯兩次 → 第 1 次 `hinting` 且無 `reveal`；第 2 次 `explained` 有 `reveal`；題目被追加到 queue 尾端一次。
   3. 手寫題 `unreadable` → `q_try` 不增加。
   4. `review` 模式在無資料時回 `empty`。
+  5. 看圖清單為空時，手寫題送出 → 不呼叫 AI，回 `selfGradeAvailable=true`。
 
 **T-10　路由**（相依：T-09）
-- `tutor/routes.rs`：§7 全部端點，掛在 `main.rs` 的 `/api/tutor`；`TutorState { pool, data_dir, ai_sem, session_locks }`。
+- `tutor/routes.rs`：§7 全部端點（含 `/admin/ai/*`），掛在 `main.rs` 的 `/api/tutor`；`TutorState { pool, data_dir, ai: Arc<Registry>, ai_sem, session_locks }`。
 - `/assets/*`：`canonicalize` 後必須仍在 `tutor_data/assets` 或 `tutor_data/answers` 底下。
 - 驗收：`curl` 腳本跑完「建學童 → 匯入 → 開 session → 答題 → next → end → report」。
 
@@ -617,36 +870,41 @@ interface TutorReply {
 
 ### Phase 4 — 題庫補強與新科目
 
-**T-15　書本頁碼/位置 AI 補強**（相依：T-08, T-10）
-- 背景工作：對某科目每張掃描頁（非解答頁，檔名不含「解答」）呼叫 agy（`purpose=enrich_page`），檔案放 `page.jpg` + `questions.json`（該科目 `book_page` 為 NULL 或 `book_where` 為空的題目，只含 id/stem/options）。
-- 任務 prompt：「找出哪些題目印在這一頁，以及在頁面的哪個位置（例如『左上第二大題』『右下角的地圖』），寫入 `./out/enrich.json`：`[{"id":"...","where":"...","concept_tags":["..."]}]`」。
+**T-15　書本頁碼/位置 AI 補強**（相依：T-08a, T-10）
+- 背景工作：對某科目每張掃描頁（非解答頁，檔名不含「解答」）透過 `call_json::<Vec<EnrichItem>>(registry.engines_for(EnrichPage), …)` 呼叫看圖用 AI 後端（`writes_files=false` 的後端改從回覆文字擷取 JSON），檔案放 `page.jpg` + `questions.json`（該科目 `book_page` 為 NULL 或 `book_where` 為空的題目，只含 id/stem/options）。
+- 任務 prompt：「找出哪些題目印在這一頁，以及在頁面的哪個位置（例如『左上第二大題』『右下角的地圖』），輸出 JSON：`[{"id":"...","where":"...","concept_tags":["..."]}]`」。
 - 只寫入 NULL/空欄位（不覆寫人工值），`book_page` = 掃描編號 + `page_offset`。
 - 驗收：社會科跑完後 `book_page IS NULL` 的題數下降；人工抽查 5 題位置描述正確。
 
 **T-16　新科目匯入管線（國文/數學）**（相依：T-15）
-- 掃描放 `jamie-exam/data/scans/{國文|數學}/`，題目頁＋解答頁成對交給 agy 萃取成 §4 的題目 JSON（新增 `math_expr`、`chinese_write`），輸出 `questions_{subject}.json` 後走 T-04 匯入。
+- 掃描放 `jamie-exam/data/scans/{國文|數學}/`，題目頁＋解答頁成對交給看圖用 AI 後端（`engines_for(EnrichPage)`）萃取成 §4 的題目 JSON（新增 `math_expr`、`chinese_write`），輸出 `questions_{subject}.json` 後走 T-04 匯入。
 - 萃取結果**需人工在 QuestionAdmin 審核**（新增欄位 `source='ai_extract'`，審核後改 `active=1`；萃取時預設 `active=0`）。
 
 ### Phase 5 — 可選加值
 
 **T-17　語音**：`speechSynthesis`（`zh-TW`）朗讀 `say`；Chrome 下用 `webkitSpeechRecognition` 讓學童口說回答 `text`/`student_message`。設定頁可關閉。
 **T-18　家長通知**：session 結束摘要可匯出 / 列印。
+**T-19　HttpApiEngine（預留）**：直接呼叫模型 HTTP API 的 `AiEngine` 實作（圖片以 base64 內嵌，`reads_files/writes_files=false`），免 spawn、延遲較低。只需新增 `tutor/ai/http_engine.rs` 並在 registry 註冊。
+**T-20　既有 Console 改用 CliAdapter（可選）**：讓 `executor/runner.rs` 也透過 `CliAdapter::build_command/parse_line`，Console 即可切換不同 CLI。需另外處理 runner 的串流 log 與 git diff，獨立評估。
 
 ---
 
 ## 11. 測試策略
 
 - **純邏輯**（srs、grading、prompts、import 正規化）：單元測試，不碰 agy。
-- **AI 流程**：一律用 fake agy（`ANTIGRAVITY_CLI_BIN`），CI 不呼叫真 agy。
-- **真 agy 冒煙測試**：`cargo test -- --ignored real_agy`，手動跑；用 T-00 的探測圖片。
+- **業務邏輯（engine）**：一律用 `MockEngine`，不 spawn 任何行程。
+- **CliEngine / adapter**：`build_command`、`parse_line` 純函式測試 + fixture；行程管理用 fake CLI（`TUTOR_CLI_BIN_<ID>`）。CI 不呼叫真 CLI。
+- **真 CLI 冒煙測試**：`cargo test -- --ignored real_cli_<id>`，手動跑；用 T-00 的探測圖片。
 - **前端**：手動驗收清單——遠距 2.5 公尺可讀、手寫板延遲無明顯拖影、AI 等待期間不可重複送出。
 
 ## 12. 風險與對策
 
 | 風險 | 對策 |
 |---|---|
-| agy 無法在 `-p` 模式讀圖 | T-00 先驗證；失敗則手寫題退回「自評」模式，其餘功能不受影響 |
-| 每次 spawn agy 延遲高（數秒~數十秒） | 選擇題答對不叫 AI；手寫批改與教學合併成一次呼叫；UI 等待動畫 |
+| agy 無法在 `-p` 模式讀圖 | T-00 先驗證；可把看圖用途指派給其他 CLI（`TUTOR_AI_BACKENDS_VISION`）；都不行則手寫題退回「自評」 |
+| 各家 CLI 改版、旗標或輸出格式變動 | 差異集中在單一 adapter 檔案＋fixture 測試；`GenericAdapter` 可不改程式碼調整；多後端清單自動容錯 |
+| 各家輸出品質不同（JSON 遵從度、中文用語） | `call_turn` 嚴格 schema 驗證＋重試；`ai_calls` 記錄 backend，可在管理頁比較各後端失敗率 |
+| 每次 spawn CLI 延遲高（數秒~數十秒） | 選擇題答對不叫 AI；手寫批改與教學合併成一次呼叫；UI 等待動畫 |
 | AI 洩漏答案 / 亂給頁碼 | engine 覆寫 action、字串檢查答案、頁碼白名單 |
 | AI 輸出非 JSON | 檔案輸出優先、擷取 `{...}`、重試 1 次、罐頭回覆 |
 | 手寫辨識錯誤導致誤判 | 顯示 `recognizedText`（「老師看到你寫的是：東比」），提供「老師看錯了」按鈕 → `self_grade` |
@@ -659,8 +917,9 @@ interface TutorReply {
 
 （由執行 T-00 的 agent 填寫）
 
-- 圖片引用方式：
-- 使用模型：
-- 平均延遲：
-- 平均 token：
-- 備註：
+| CLI | 版本 | 圖片引用方式（PromptPath / AtMention / Flag / 不支援） | 能寫 out/turn.json | 模型 | 平均延遲 | 平均 token | 與 §6.1 旗標差異 |
+|---|---|---|---|---|---|---|---|
+| agy | | | | | | | |
+| claude | | | | | | | |
+| gemini | | | | | | | |
+| codex | | | | | | | |
