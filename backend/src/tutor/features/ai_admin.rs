@@ -1,7 +1,7 @@
 use std::time::Duration;
 use axum::{
     extract::State,
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,7 @@ pub fn routes() -> Router<TutorState> {
     Router::new()
         .route("/admin/ai/backends", get(get_backends).put(update_backends))
         .route("/admin/ai/test", post(test_backend))
+        .route("/admin/ai/calls", get(get_recent_ai_calls))
 }
 
 async fn get_backends(
@@ -216,4 +217,77 @@ async fn test_backend(
             error: Some(e.to_string()),
         })),
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCallItemView {
+    pub id: String,
+    pub backend: String,
+    pub model: Option<String>,
+    pub purpose: String,
+    pub session_id: Option<String>,
+    pub question_id: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub raw_output: Option<String>,
+    pub prompt: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub created_at: String,
+}
+
+async fn get_recent_ai_calls(
+    State(state): State<TutorState>,
+) -> Result<Json<Vec<AiCallItemView>>, ApiError> {
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        String,
+    )> = sqlx::query_as(
+        r#"
+        SELECT id, backend, model, purpose, session_id, question_id,
+               duration_ms, ok, error, raw_output, prompt, input_tokens, output_tokens, created_at
+        FROM ai_calls
+        ORDER BY created_at DESC
+        LIMIT 20
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let views = rows
+        .into_iter()
+        .map(|r| AiCallItemView {
+            id: r.0,
+            backend: r.1,
+            model: r.2,
+            purpose: r.3,
+            session_id: r.4,
+            question_id: r.5,
+            duration_ms: r.6,
+            ok: r.7 != 0,
+            error: r.8,
+            raw_output: r.9,
+            prompt: r.10,
+            input_tokens: r.11,
+            output_tokens: r.12,
+            created_at: r.13,
+        })
+        .collect();
+
+    Ok(Json(views))
 }

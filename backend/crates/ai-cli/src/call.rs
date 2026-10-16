@@ -18,6 +18,7 @@ pub struct CallRecord {
     pub ok: bool,
     pub error: Option<String>,
     pub raw_tail: String,
+    pub prompt: String,
 }
 
 pub struct CallSpec<'a> {
@@ -66,7 +67,7 @@ pub async fn call_json<T: DeserializeOwned>(
             let inv = AiInvocation {
                 call_id,
                 purpose: spec.purpose,
-                prompt,
+                prompt: prompt.clone(),
                 files: run_files,
                 images: spec.images.clone(),
                 expect_output_file: if caps.writes_files {
@@ -98,6 +99,7 @@ pub async fn call_json<T: DeserializeOwned>(
                                 ok: true,
                                 error: None,
                                 raw_tail: text_to_parse.chars().take(4096).collect(),
+                                prompt: prompt.clone(),
                             });
                             return (Ok(val), records);
                         }
@@ -110,6 +112,7 @@ pub async fn call_json<T: DeserializeOwned>(
                                 ok: false,
                                 error: Some(format!("JSON parse error: {parse_err}")),
                                 raw_tail: text_to_parse.chars().take(4096).collect(),
+                                prompt: prompt.clone(),
                             });
                             retry_count += 1;
                             parse_hint = "上次輸出不是合法 JSON，請只輸出 JSON 物件，不要有任何其他文字。".to_string();
@@ -125,6 +128,7 @@ pub async fn call_json<T: DeserializeOwned>(
                         ok: false,
                         error: Some(e.to_string()),
                         raw_tail: String::new(),
+                        prompt: prompt.clone(),
                     });
                     break; // Switch to next engine
                 }

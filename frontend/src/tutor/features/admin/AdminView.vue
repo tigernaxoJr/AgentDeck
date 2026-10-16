@@ -25,11 +25,19 @@
       >
         題庫與書本頁碼
       </button>
+      <button
+        type="button"
+        :class="['px-6 py-3 rounded-2xl font-black text-xl cursor-pointer', tab === 'debug' ? 'bg-amber-600 text-white shadow-md' : 'text-stone-500 hover:text-stone-900 dark:hover:text-stone-100']"
+        @click="tab = 'debug'"
+      >
+        🔍 AI Prompt 觀察 (Debug)
+      </button>
     </div>
 
     <div>
       <AiBackends v-if="tab === 'backends'" />
-      <QuestionAdmin v-else />
+      <QuestionAdmin v-else-if="tab === 'questions'" />
+      <AiCallsViewer v-else-if="tab === 'debug'" />
     </div>
   </div>
 </template>
@@ -38,6 +46,7 @@
 import { ref } from 'vue';
 import AiBackends from './AiBackends.vue';
 import QuestionAdmin from './QuestionAdmin.vue';
+import AiCallsViewer from './AiCallsViewer.vue';
 
-const tab = ref<'backends' | 'questions'>('backends');
+const tab = ref<'backends' | 'questions' | 'debug'>('backends');
 </script>

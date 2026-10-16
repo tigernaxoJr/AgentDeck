@@ -10,7 +10,7 @@ use serde::Deserialize;
 use ai_cli::{AiPurpose, RunFile};
 use crate::tutor::ai::prompts::{PromptContext, PromptDialogItem, PromptWeakConcept};
 use crate::tutor::ai::turn::call_turn;
-use crate::tutor::shared::dto::{BookRef, TutorReply};
+use crate::tutor::shared::dto::TutorReply;
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{load_question, load_session, load_weaknesses};
 use crate::tutor::TutorState;

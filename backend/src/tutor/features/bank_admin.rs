@@ -1,10 +1,10 @@
 use axum::{
     extract::{Path, State},
-    routing::{get, patch},
+    routing::get,
     Json, Router,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::tutor::domain::question::Question;
 use crate::tutor::shared::error::ApiError;

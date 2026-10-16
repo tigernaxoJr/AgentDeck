@@ -8,7 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::tutor::domain::session::{select_queue, Candidates, QState, Session};
-use crate::tutor::shared::dto::{DialogTurnView, QuestionView, SessionView};
+use crate::tutor::shared::dto::{QuestionView, SessionView};
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{load_question, save_session};
 use crate::tutor::TutorState;
@@ -30,7 +30,14 @@ async fn start_session(
     State(state): State<TutorState>,
     Json(payload): Json<StartSessionReq>,
 ) -> Result<Json<SessionView>, ApiError> {
-    let limit = payload.limit.unwrap_or(15);
+    // In progress mode with a specific round/unit, practice the entire round by default (up to 100)
+    let limit = payload.limit.unwrap_or_else(|| {
+        if payload.mode == "progress" && payload.unit_id.is_some() {
+            100
+        } else {
+            15
+        }
+    });
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
     let now = Utc::now();
     let now_str = now.to_rfc3339();

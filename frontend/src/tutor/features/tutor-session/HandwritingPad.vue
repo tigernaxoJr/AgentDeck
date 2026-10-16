@@ -119,6 +119,7 @@
         @pointermove="handlePointerMove"
         @pointerup="handlePointerUp"
         @pointercancel="handlePointerUp"
+        @pointerleave="handlePointerLeave"
       />
     </div>
   </div>
@@ -161,8 +162,20 @@ onMounted(() => {
 });
 
 function handlePointerDown(e: PointerEvent) {
+  // Only accept primary button (usually left click / pen touch)
+  // For mouse: button must be 0 (left button) and buttons must have bit 1 set (buttons & 1)
+  if (e.pointerType === 'mouse' && e.buttons !== 1) return;
+  if (e.button !== 0 && !e.isPrimary) return;
+
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {}
+
   isDrawing = true;
-  const rect = canvasRef.value!.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
   const pressure = e.pressure > 0 ? e.pressure : 0.5;
@@ -176,8 +189,18 @@ function handlePointerDown(e: PointerEvent) {
 }
 
 function handlePointerMove(e: PointerEvent) {
+  // Guard against drawing if mouse/pen is NOT currently pressed
+  if (e.buttons === 0 || (e.pointerType === 'mouse' && (e.buttons & 1) === 0)) {
+    if (isDrawing) {
+      handlePointerUp(e);
+    }
+    return;
+  }
   if (!isDrawing || !currentStroke) return;
-  const rect = canvasRef.value!.getBoundingClientRect();
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
   const pressure = e.pressure > 0 ? e.pressure : 0.5;
@@ -187,9 +210,24 @@ function handlePointerMove(e: PointerEvent) {
   drawLine(lastPoint.x, lastPoint.y, x, y, pressure, currentStroke.tool);
 }
 
-function handlePointerUp() {
+function handlePointerUp(e: PointerEvent) {
+  if (canvasRef.value) {
+    try {
+      if (canvasRef.value.hasPointerCapture(e.pointerId)) {
+        canvasRef.value.releasePointerCapture(e.pointerId);
+      }
+    } catch {}
+  }
   isDrawing = false;
   currentStroke = null;
+}
+
+function handlePointerLeave(e: PointerEvent) {
+  // If pointer is not captured and leaves canvas, stop drawing
+  if (!canvasRef.value?.hasPointerCapture?.(e.pointerId)) {
+    isDrawing = false;
+    currentStroke = null;
+  }
 }
 
 function drawPoint(x: number, y: number, pressure: number, t: 'pen' | 'eraser') {

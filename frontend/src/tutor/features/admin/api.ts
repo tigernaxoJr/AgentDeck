@@ -42,3 +42,7 @@ export async function triggerEnrich(subjectId: string): Promise<any> {
     body: JSON.stringify({ subject_id: subjectId }),
   });
 }
+
+export async function fetchAiCalls(): Promise<any[]> {
+  return tutorFetch('/api/tutor/admin/ai/calls');
+}

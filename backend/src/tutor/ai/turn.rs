@@ -126,8 +126,8 @@ pub async fn call_turn(
             r#"
             INSERT INTO ai_calls (
                 id, backend, model, purpose, session_id, question_id,
-                duration_ms, ok, error, raw_output, input_tokens, output_tokens, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                duration_ms, ok, error, raw_output, prompt, input_tokens, output_tokens, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&call_id)
@@ -140,6 +140,7 @@ pub async fn call_turn(
         .bind(ok_int)
         .bind(&rec.error)
         .bind(&rec.raw_tail)
+        .bind(&rec.prompt)
         .bind(inp_tok)
         .bind(out_tok)
         .bind(&now)
@@ -152,8 +153,10 @@ pub async fn call_turn(
         Err(e) => return Err(TurnError::ExecutionFailed(e.to_string())),
     };
 
-    // Guard 1: Leaking answer check
-    if ctx.try_no <= 1 && contains_answer(&ctx.question, &turn.say) {
+    let is_correct = turn.verdict.eq_ignore_ascii_case("correct");
+
+    // Guard 1: Leaking answer check (only applies if student has NOT answered correctly yet)
+    if !is_correct && ctx.try_no <= 1 && contains_answer(&ctx.question, &turn.say) {
         turn.say = "再想想看，可以翻翻課本喔！".to_string();
     }
 

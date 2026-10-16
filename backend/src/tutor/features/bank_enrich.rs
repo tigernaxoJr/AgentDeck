@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use ai_cli::{call_json, AiEngine, AiPurpose, CallSpec, RunFile};
+use ai_cli::{call_json, AiPurpose, CallSpec, RunFile};
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{load_question, save_question};
 use crate::tutor::TutorState;

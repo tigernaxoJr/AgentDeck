@@ -1,30 +1,35 @@
 <template>
-  <div class="min-h-screen bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col justify-center py-12">
-    <div class="flex items-center justify-center mb-8 gap-4">
-      <span class="text-6xl">🧑‍🏫</span>
-      <h1 class="text-5xl font-black text-amber-800 dark:text-amber-500">
-        AI 家教伴讀複習
-      </h1>
-    </div>
+  <div class="min-h-screen bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col px-4 pb-28">
+    <!-- Top Navigation Bar -->
+    <header class="max-w-4xl w-full mx-auto flex items-center justify-between py-4 border-b border-stone-200 dark:border-stone-800">
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">🧑‍🏫</span>
+        <h1 class="text-2xl md:text-3xl font-black text-amber-800 dark:text-amber-500">
+          AI 家教伴讀
+        </h1>
+      </div>
 
-    <StudentPicker v-if="!currentStudent" @select="currentStudent = $event" />
-    <SessionSetup v-else :student="currentStudent" @change-student="currentStudent = null" />
+      <nav class="flex items-center gap-3 md:gap-5 text-sm md:text-base font-bold text-stone-600 dark:text-stone-400">
+        <router-link
+          v-if="currentStudent"
+          :to="`/tutor/report/${currentStudent.id}`"
+          class="hover:text-amber-600 transition-colors"
+        >
+          📊 家長報告
+        </router-link>
+        <router-link to="/tutor/admin" class="hover:text-amber-600 transition-colors">
+          ⚙️ 題庫與 AI
+        </router-link>
+        <router-link to="/" class="hover:text-stone-800 dark:hover:text-stone-200 transition-colors">
+          🖥️ 控制台
+        </router-link>
+      </nav>
+    </header>
 
-    <div class="flex items-center justify-center gap-6 mt-12 text-lg font-bold text-stone-500">
-      <router-link
-        v-if="currentStudent"
-        :to="`/tutor/report/${currentStudent.id}`"
-        class="hover:text-amber-600 underline"
-      >
-        📊 家長報告
-      </router-link>
-      <router-link to="/tutor/admin" class="hover:text-amber-600 underline">
-        ⚙️ 題庫與 AI 設定
-      </router-link>
-      <router-link to="/" class="hover:text-stone-700 underline">
-        🖥️ 返回開發控制台
-      </router-link>
-    </div>
+    <main class="flex-1 flex flex-col justify-start my-4">
+      <StudentPicker v-if="!currentStudent" @select="currentStudent = $event" />
+      <SessionSetup v-else :student="currentStudent" @change-student="currentStudent = null" />
+    </main>
   </div>
 </template>
 

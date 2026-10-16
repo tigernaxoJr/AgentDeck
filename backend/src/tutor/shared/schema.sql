@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS ai_calls (            -- 除錯 / 成本追蹤
   ok           INTEGER NOT NULL,
   error        TEXT,
   raw_output   TEXT,                              -- turn.json 原文或 stdout 尾端 4KB
+  prompt       TEXT,                              -- 送給 AI 的 Prompt
   input_tokens INTEGER, output_tokens INTEGER,
   created_at   TEXT NOT NULL
 );

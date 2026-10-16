@@ -13,11 +13,11 @@ use crate::tutor::ai::prompts::{PromptContext, PromptDialogItem, PromptWeakConce
 use crate::tutor::ai::turn::{
     call_turn, canned_praise, canned_wrong_explain, canned_wrong_hint, TutorFeedback,
 };
-use crate::tutor::domain::progress::{next_mastery, update_weakness, Outcome};
+use crate::tutor::domain::progress::{next_mastery, update_weakness};
 use crate::tutor::domain::question::{
-    answer_display, describe_choice, grade_choice, ChoiceInput, InputMode, Question, Verdict,
+    answer_display, describe_choice, grade_choice, ChoiceInput, Question, Verdict,
 };
-use crate::tutor::domain::session::{QState, Session, Step, TeachAction};
+use crate::tutor::domain::session::{QState, Session, TeachAction};
 use crate::tutor::shared::dto::{BookRef, RevealInfo, TutorReply};
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{
@@ -131,11 +131,11 @@ async fn handle_answer(
     let is_rule_gradable = matches!(payload.kind.as_str(), "choice")
         || (payload.kind == "text" && matches!(q.qtype, crate::tutor::domain::question::QType::TrueFalse | crate::tutor::domain::question::QType::SingleChoice));
 
-    let mut graded_by = "rule";
-    let mut verdict = Verdict::Incorrect;
+    let graded_by;
+    let verdict;
     let mut recognized_text = None;
     let mut ai_feedback: Option<TutorFeedback> = None;
-    let mut self_grade_available = false;
+    let self_grade_available = false;
     let mut choice_desc: Option<String> = None;
 
     if is_rule_gradable {
@@ -156,12 +156,12 @@ async fn handle_answer(
         };
         verdict = grade_choice(&q, &input);
         choice_desc = Some(describe_choice(&q, &input));
+        graded_by = "rule";
     } else {
         // Need AI grading
         let vision_engines = state.ai.engines_for(AiPurpose::GradeHandwriting).await;
         if vision_engines.is_empty() {
             // No vision engine available -> fallback to self-grade
-            self_grade_available = true;
             return Ok(Json(TutorReply {
                 verdict: "none".into(),
                 say: "目前 AI 辨識尚未連線，請點選標準答案自己對答案喔！".into(),
@@ -233,13 +233,17 @@ async fn handle_answer(
 
     // 5. Teaching AI if wrong & rule-graded
     let mut tutor_say = String::new();
-    let mut tutor_action = serde_json::to_string(&step.action).unwrap().trim_matches('"').to_string();
+    let tutor_action = serde_json::to_string(&step.action).unwrap().trim_matches('"').to_string();
     let mut book_ref = None;
     let mut followup_q = None;
 
     if let Some(ref fb) = ai_feedback {
         tutor_say = fb.say.clone();
-        book_ref = fb.book_ref.clone();
+        book_ref = if step.action == TeachAction::Praise {
+            None
+        } else {
+            fb.book_ref.clone()
+        };
         followup_q = fb.followup_question.clone();
     } else {
         match step.action {

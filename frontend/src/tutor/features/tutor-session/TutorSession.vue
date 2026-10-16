@@ -229,6 +229,10 @@ const {
 } = useTutorSession(sessionId);
 
 const currentBookRef = computed(() => {
+  // If student already answered correctly and can proceed, don't nag with book callout
+  if (canNext.value && lastReply.value?.verdict === 'correct') {
+    return undefined;
+  }
   const q = session.value?.question;
   return lastReply.value?.bookRef || (q?.bookPage ? { page: q.bookPage, where: q.bookWhere || '' } : undefined);
 });
