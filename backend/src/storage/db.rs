@@ -10,9 +10,48 @@ use sqlx::{
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use super::migrate::{self, Migration};
 use crate::models::protocol::{
     ArtifactData, ServerEvent, TaskMetadata, TaskState,
 };
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "init",
+    sql: r#"
+        CREATE TABLE IF NOT EXISTS tasks (
+            task_id TEXT PRIMARY KEY NOT NULL,
+            prompt TEXT NOT NULL,
+            workspace_path TEXT NOT NULL,
+            model TEXT,
+            state TEXT NOT NULL,
+            exit_code INTEGER,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            artifact_file_name TEXT,
+            artifact_type TEXT,
+            artifact_content TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            thinking_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            total_tokens INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+    "#,
+}];
+
+/// 版本化遷移之前陸續以 ALTER TABLE 加入的欄位
+const LEGACY_ADDED_COLUMNS: &[(&str, &str)] = &[
+    ("model", "TEXT"),
+    ("input_tokens", "INTEGER"),
+    ("output_tokens", "INTEGER"),
+    ("thinking_tokens", "INTEGER"),
+    ("cache_read_tokens", "INTEGER"),
+    ("total_tokens", "INTEGER"),
+];
 
 #[derive(Clone)]
 pub struct TaskRepository {
@@ -41,42 +80,27 @@ impl TaskRepository {
     }
 
     async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY NOT NULL,
-                prompt TEXT NOT NULL,
-                workspace_path TEXT NOT NULL,
-                model TEXT,
-                state TEXT NOT NULL,
-                exit_code INTEGER,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                finished_at TEXT,
-                artifact_file_name TEXT,
-                artifact_type TEXT,
-                artifact_content TEXT,
-                input_tokens INTEGER,
-                output_tokens INTEGER,
-                thinking_tokens INTEGER,
-                cache_read_tokens INTEGER,
-                total_tokens INTEGER
-            );
-            CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        if migrate::current_version(&self.pool).await? == 0 {
+            self.upgrade_legacy_tasks_table().await?;
+        }
+        migrate::run(&self.pool, MIGRATIONS).await
+    }
 
-        // 確保升級相容：若舊表存在則嘗試新增欄位 (若已存在則忽略錯誤)
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN model TEXT").execute(&self.pool).await;
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER").execute(&self.pool).await;
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER").execute(&self.pool).await;
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN thinking_tokens INTEGER").execute(&self.pool).await;
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN cache_read_tokens INTEGER").execute(&self.pool).await;
-        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN total_tokens INTEGER").execute(&self.pool).await;
-
+    /// 版本化遷移之前建立的舊資料庫可能缺少後來新增的欄位，先補齊再交給 v1 基準
+    async fn upgrade_legacy_tasks_table(&self) -> Result<(), sqlx::Error> {
+        let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('tasks')")
+            .fetch_all(&self.pool)
+            .await?;
+        if columns.is_empty() {
+            return Ok(());
+        }
+        for (name, ty) in LEGACY_ADDED_COLUMNS {
+            if !columns.iter().any(|c| c == name) {
+                sqlx::raw_sql(&format!("ALTER TABLE tasks ADD COLUMN {name} {ty}"))
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -376,5 +400,39 @@ impl TaskRepository {
         tokio::time::sleep(Duration::from_millis(150)).await;
         self.pool.close().await;
         println!("💾 [SQLite] 資料庫連線池已安全關閉。");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_init_upgrades_legacy_tasks_table() {
+        let url = "sqlite:file:legacy_tasks_test?mode=memory&cache=shared";
+        // 保持一條連線存活，讓共享記憶體資料庫在 init 前不被釋放
+        let legacy = SqlitePool::connect(url).await.unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE tasks (task_id TEXT PRIMARY KEY NOT NULL, prompt TEXT NOT NULL,
+             workspace_path TEXT NOT NULL, state TEXT NOT NULL, exit_code INTEGER,
+             created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+             artifact_file_name TEXT, artifact_type TEXT, artifact_content TEXT)",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+
+        let repo = TaskRepository::init(url).await.unwrap();
+        let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('tasks')")
+            .fetch_all(&repo.pool)
+            .await
+            .unwrap();
+        for (name, _) in LEGACY_ADDED_COLUMNS {
+            assert!(columns.iter().any(|c| c == name), "missing column {name}");
+        }
+        assert_eq!(migrate::current_version(&repo.pool).await.unwrap(), 1);
+
+        // 再次初始化不應重複套用
+        TaskRepository::init(url).await.unwrap();
     }
 }

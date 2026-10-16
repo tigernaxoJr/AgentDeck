@@ -134,8 +134,8 @@ backend-rust/
     tutor/
       mod.rs                       # [T-10] TutorState、routes() 合併所有 slice、啟動初始化
       shared/
-        db.rs                      # [T-01] open()、schema.sql include_str!
-        schema.sql                 # [T-01]
+        db.rs                      # [T-01] open()、MIGRATIONS（PRAGMA user_version 版本化遷移）
+        migrations/                # [T-01] 0001_init.sql 基準、0002_constraints.sql 約束/索引/question_concepts
         dto.rs                     # [T-05] 跨 slice 的 view：QuestionView、SessionView、TutorReply、BookRef
         error.rs                   # [T-05] ApiError（→ axum IntoResponse，{error, message}）
       domain/                      # ── 核心域：純程式 ──
@@ -184,7 +184,7 @@ frontend-vue/src/
 
 ---
 
-## 3. 資料庫設計（`backend-rust/src/tutor/shared/schema.sql`）
+## 3. 資料庫設計（`backend-rust/src/tutor/shared/migrations/`，此節為 v1 基準；v2 起的約束見 `0002_constraints.sql`）
 
 啟動時執行 `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`，DDL 全部 `CREATE TABLE IF NOT EXISTS`。時間一律存 **UTC ISO-8601 字串**（`chrono::Utc::now().to_rfc3339()`）。
 
@@ -861,7 +861,7 @@ interface TutorReply {
 ### Phase 1 — 核心域與資料層（不含 AI）
 
 **T-01　DB**（相依：無）
-- `tutor/shared/schema.sql`（§3 原文）、`tutor/shared/db.rs`：`pub async fn open(data_dir: &Path) -> SqlitePool`（建立目錄、WAL、foreign_keys、執行 schema）。
+- `tutor/shared/migrations/0001_init.sql`（§3 原文）、`tutor/shared/db.rs`：`pub async fn open(data_dir: &Path) -> SqlitePool`（建立目錄、WAL、foreign_keys、執行 schema）。
 - 驗收：以 `:memory:` 開啟，查 `sqlite_master` 確認 11 張表。
 
 **T-02　domain/question**（相依：無）

@@ -30,6 +30,10 @@ async fn start_session(
     State(state): State<TutorState>,
     Json(payload): Json<StartSessionReq>,
 ) -> Result<Json<SessionView>, ApiError> {
+    if !matches!(payload.mode.as_str(), "progress" | "review" | "mixed") {
+        return Err(ApiError::BadRequest(format!("Unknown mode: {}", payload.mode)));
+    }
+
     // In progress mode with a specific round/unit, practice the entire round by default (up to 100)
     let limit = payload.limit.unwrap_or_else(|| {
         if payload.mode == "progress" && payload.unit_id.is_some() {
@@ -100,10 +104,12 @@ async fn start_session(
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
             SELECT q.id
-            FROM questions q
-            JOIN concept_weakness cw ON cw.student_id = ? AND cw.score >= 1.0
-            WHERE q.subject_id = ? AND q.active = 1 AND instr(q.concept_tags_json, cw.concept_tag) > 0
-            ORDER BY cw.score DESC
+            FROM concept_weakness cw
+            JOIN question_concepts qc ON qc.concept_tag = cw.concept_tag
+            JOIN questions q ON q.id = qc.question_id
+            WHERE cw.student_id = ? AND cw.score >= 1.0 AND q.subject_id = ? AND q.active = 1
+            GROUP BY q.id
+            ORDER BY MAX(cw.score) DESC, q.ord ASC
             "#,
         )
         .bind(payload.student_id)
