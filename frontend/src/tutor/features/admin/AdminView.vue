@@ -1,5 +1,6 @@
 <template>
-  <div class="min-h-screen bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 p-8 max-w-5xl mx-auto flex flex-col gap-8">
+  <div class="h-screen overflow-y-auto bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100">
+  <div class="p-8 max-w-5xl mx-auto flex flex-col gap-8">
     <div class="flex items-center justify-between pb-6 border-b-2 border-stone-200 dark:border-stone-800">
       <h1 class="text-4xl font-black text-amber-800 dark:text-amber-500">
         ⚙️ 家教系統後台管理
@@ -39,6 +40,7 @@
       <QuestionAdmin v-else-if="tab === 'questions'" />
       <AiCallsViewer v-else-if="tab === 'debug'" />
     </div>
+  </div>
   </div>
 </template>
 

@@ -31,8 +31,10 @@ export function useTutorSession(sessionId: string) {
   const canNext = computed(() => ['revealed', 'explained'].includes(session.value?.qState || ''));
   const isLast = computed(() => !!session.value && session.value.index >= session.value.total);
 
-  function showError(e: unknown, fallback: string) {
-    toast.value = (e as Error)?.message || fallback;
+  /** friendly：AI 相關錯誤訊息是給大人看的，孩子只看到簡單說明 */
+  function showError(e: unknown, fallback: string, friendly = false) {
+    console.error(e);
+    toast.value = friendly ? fallback : (e as Error)?.message || fallback;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast.value = ''), 4000);
   }
@@ -71,8 +73,11 @@ export function useTutorSession(sessionId: string) {
         selfGradeModal.value = true;
       }
     } catch (e) {
+      // 沒送成功就把剛剛的作答泡泡收回，讓孩子重送
+      const last = session.value?.dialog.at(-1);
+      if (last?.role === 'student' && last.content === label) session.value!.dialog.pop();
       if (!(e as Error).message?.includes('Conflict')) {
-        showError(e, '送出作答失敗');
+        showError(e, '老師剛剛沒有回應，請再按一次「送出答案」', true);
       }
     } finally {
       aiThinking.value = false;
@@ -142,7 +147,10 @@ export function useTutorSession(sessionId: string) {
         bookRef: reply.bookRef,
       });
     } catch (e) {
-      showError(e, '問老師失敗');
+      // 把問題放回輸入框，方便重問
+      if (session.value?.dialog.at(-1)?.content === txt) session.value.dialog.pop();
+      askText.value = txt;
+      showError(e, '老師剛剛沒有回應，請再問一次', true);
     } finally {
       aiThinking.value = false;
     }

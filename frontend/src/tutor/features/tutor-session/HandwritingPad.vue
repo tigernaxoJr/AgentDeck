@@ -1,7 +1,7 @@
 <template>
-  <div class="handwriting-pad relative flex flex-col items-center select-none w-full">
+  <div :class="['handwriting-pad relative flex flex-col items-center select-none w-full', disabled && 'opacity-80']">
     <!-- Controls Toolbar -->
-    <div class="flex items-center gap-4 mb-3 w-full justify-between px-2">
+    <fieldset :disabled="disabled" class="flex flex-wrap items-center gap-2 mb-3 w-full justify-between px-2 disabled:opacity-50">
       <div class="flex items-center gap-2">
         <button
           type="button"
@@ -35,13 +35,16 @@
           🗑️ 清除 (C)
         </button>
       </div>
-    </div>
+    </fieldset>
 
     <!-- Canvas Container -->
     <div
       ref="containerRef"
-      class="relative bg-white rounded-2xl border-4 border-stone-300 dark:border-stone-600 shadow-inner overflow-hidden cursor-crosshair touch-none"
-      :style="{ width: `${width}px`, height: `${height}px` }"
+      :class="[
+        'relative w-full bg-white rounded-2xl outline-4 outline-stone-300 dark:outline-stone-600 shadow-inner overflow-hidden touch-none',
+        disabled ? 'pointer-events-none' : 'cursor-crosshair',
+      ]"
+      :style="{ maxWidth: `min(${canvasW}px, calc(45vh * ${canvasW / canvasH}))`, aspectRatio: `${canvasW} / ${canvasH}` }"
     >
       <!-- Background Image if image_canvas -->
       <img
@@ -50,6 +53,7 @@
         :src="bgImageUrl"
         class="absolute inset-0 w-full h-full object-contain pointer-events-none select-none opacity-90"
         alt="Background"
+        @load="fitToImage"
       />
 
       <!-- Grid lines (visual only, not exported in char_grid mode) -->
@@ -57,6 +61,8 @@
         v-if="mode === 'char_grid' && gridCount > 0"
         class="absolute inset-0 w-full h-full pointer-events-none opacity-40"
         xmlns="http://www.w3.org/2000/svg"
+        :viewBox="`0 0 ${canvasW} ${canvasH}`"
+        preserveAspectRatio="none"
       >
         <template v-for="i in gridCount" :key="i">
           <!-- Box boundary -->
@@ -64,7 +70,7 @@
             :x="(i - 1) * gridWidth + 4"
             y="4"
             :width="gridWidth - 8"
-            :height="height - 8"
+            :height="canvasH - 8"
             fill="none"
             stroke="#e06d43"
             stroke-width="2"
@@ -74,16 +80,16 @@
             :x1="(i - 1) * gridWidth + gridWidth / 2"
             y1="4"
             :x2="(i - 1) * gridWidth + gridWidth / 2"
-            :y2="height - 4"
+            :y2="canvasH - 4"
             stroke="#e06d43"
             stroke-dasharray="4 4"
             stroke-width="1.5"
           />
           <line
             :x1="(i - 1) * gridWidth + 4"
-            :y1="height / 2"
+            :y1="canvasH / 2"
             :x2="i * gridWidth - 4"
-            :y2="height / 2"
+            :y2="canvasH / 2"
             stroke="#e06d43"
             stroke-dasharray="4 4"
             stroke-width="1.5"
@@ -92,7 +98,7 @@
             :x1="(i - 1) * gridWidth + 4"
             y1="4"
             :x2="i * gridWidth - 4"
-            :y2="height - 4"
+            :y2="canvasH - 4"
             stroke="#e06d43"
             stroke-dasharray="4 4"
             stroke-width="1"
@@ -101,7 +107,7 @@
             :x1="i * gridWidth - 4"
             y1="4"
             :x2="(i - 1) * gridWidth + 4"
-            :y2="height - 4"
+            :y2="canvasH - 4"
             stroke="#e06d43"
             stroke-dasharray="4 4"
             stroke-width="1"
@@ -112,9 +118,9 @@
       <!-- Drawing Canvas -->
       <canvas
         ref="canvasRef"
-        :width="width"
-        :height="height"
-        class="absolute inset-0 touch-none"
+        :width="canvasW"
+        :height="canvasH"
+        class="absolute inset-0 w-full h-full touch-none"
         @pointerdown="handlePointerDown"
         @pointermove="handlePointerMove"
         @pointerup="handlePointerUp"
@@ -126,7 +132,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, nextTick } from 'vue';
 
 const props = withDefaults(
   defineProps<{
@@ -135,6 +141,7 @@ const props = withDefaults(
     bgImageUrl?: string;
     width?: number;
     height?: number;
+    disabled?: boolean;
   }>(),
   {
     mode: 'char_grid',
@@ -154,10 +161,34 @@ const strokes = ref<Array<{ tool: 'pen' | 'eraser'; points: Array<{ x: number; y
 let currentStroke: { tool: 'pen' | 'eraser'; points: Array<{ x: number; y: number; pressure: number }> } | null = null;
 let isDrawing = false;
 
+/** 畫布內部解析度；顯示時依容器寬度等比縮放 */
+const canvasW = ref(props.mode === 'image_canvas' ? 760 : props.width);
+const canvasH = ref(props.height);
+
 const gridCount = computed(() => props.charCount || 2);
-const gridWidth = computed(() => props.width / gridCount.value);
+const gridWidth = computed(() => canvasW.value / gridCount.value);
+
+/** 圖上作答時讓畫布跟底圖同比例，畫面與匯出的筆跡位置才會對齊 */
+async function fitToImage() {
+  const img = bgImgRef.value;
+  if (!img?.naturalWidth || !img.naturalHeight) return;
+  canvasH.value = Math.round((canvasW.value * img.naturalHeight) / img.naturalWidth);
+  await nextTick();
+  redraw();
+}
+
+/** 螢幕座標轉成畫布內部座標 */
+function toCanvasPoint(e: PointerEvent, canvas: HTMLCanvasElement) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((e.clientX - rect.left) * canvas.width) / rect.width,
+    y: ((e.clientY - rect.top) * canvas.height) / rect.height,
+  };
+}
 
 onMounted(() => {
+  // 底圖可能在掛載前就已從快取載入完成，不會再觸發 load
+  if (bgImgRef.value?.complete) fitToImage();
   redraw();
 });
 
@@ -166,6 +197,7 @@ function handlePointerDown(e: PointerEvent) {
   // For mouse: button must be 0 (left button) and buttons must have bit 1 set (buttons & 1)
   if (e.pointerType === 'mouse' && e.buttons !== 1) return;
   if (e.button !== 0 && !e.isPrimary) return;
+  if (props.disabled) return;
 
   const canvas = canvasRef.value;
   if (!canvas) return;
@@ -175,9 +207,7 @@ function handlePointerDown(e: PointerEvent) {
   } catch {}
 
   isDrawing = true;
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const { x, y } = toCanvasPoint(e, canvas);
   const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
   currentStroke = {
@@ -200,9 +230,7 @@ function handlePointerMove(e: PointerEvent) {
   const canvas = canvasRef.value;
   if (!canvas) return;
 
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const { x, y } = toCanvasPoint(e, canvas);
   const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
   const lastPoint = currentStroke.points[currentStroke.points.length - 1];

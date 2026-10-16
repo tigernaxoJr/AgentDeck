@@ -27,10 +27,11 @@
               ? 'border-amber-500 bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-100'
               : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800'
           ]"
-          @click="selectedSubjectId = sub.id"
+          @click="selectSubject(sub.id)"
         >
           <span>{{ sub.name }}</span>
-          <span class="text-xs md:text-sm font-normal text-stone-500 dark:text-stone-400">{{ sub.bookTitle }}</span>
+          <span v-if="sub.bookTitle" class="text-xs md:text-sm font-normal text-stone-500 dark:text-stone-400">{{ sub.bookTitle }}</span>
+          <span v-if="!sub.units.length" class="text-xs md:text-sm font-bold text-stone-400">尚無題目</span>
         </button>
       </div>
     </div>
@@ -95,21 +96,38 @@
         <span class="text-xl md:text-2xl font-bold">3. 選擇回數（實體評量每回約 20~30 題）</span>
         <span class="text-sm text-stone-500 font-bold">共 {{ currentSubject.units.length }} 回</span>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto p-1">
+      <p
+        v-if="!currentSubject.units.length"
+        class="rounded-2xl border-2 border-dashed border-stone-300 dark:border-stone-700 p-6 text-center text-lg font-bold text-stone-500"
+      >
+        這個科目還沒有匯入題目，請先到「題庫與 AI」匯入。
+      </p>
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
         <button
-          v-for="u in currentSubject.units"
+          v-for="u in unitItems"
           :key="u.id"
           type="button"
           :class="[
-            'p-3.5 rounded-2xl border-2 text-left font-bold text-base flex items-center justify-between transition-all cursor-pointer',
+            'p-3.5 rounded-2xl border-2 text-left flex flex-col gap-2 transition-all cursor-pointer',
             selectedUnitId === u.id
-              ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/60 shadow-sm'
+              ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/60 ring-2 ring-amber-300 dark:ring-amber-700'
               : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 hover:border-stone-400'
           ]"
           @click="selectedUnitId = u.id"
         >
-          <span class="truncate mr-2">{{ u.title }}</span>
-          <span class="text-xs font-normal text-stone-500 shrink-0">熟練 {{ u.mastered }} / {{ u.total }}</span>
+          <span class="flex items-center gap-2 font-bold text-base">
+            <span class="shrink-0 text-amber-700 dark:text-amber-400">第 {{ u.no }} 回</span>
+            <span class="truncate">{{ u.name }}</span>
+            <span v-if="u.pages" class="ml-auto shrink-0 text-xs font-bold text-stone-500 bg-stone-100 dark:bg-stone-700 dark:text-stone-300 rounded-full px-2 py-0.5">
+              📖 {{ u.pages }}
+            </span>
+          </span>
+          <span class="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
+            <span class="flex-1 h-1.5 rounded-full bg-stone-200 dark:bg-stone-700 overflow-hidden">
+              <span class="block h-full rounded-full bg-emerald-500" :style="{ width: `${u.pct}%` }" />
+            </span>
+            <span class="shrink-0 w-20 text-right">{{ u.done ? '✅ 已熟練' : `熟練 ${u.mastered} / ${u.total}` }}</span>
+          </span>
         </button>
       </div>
     </div>
@@ -123,8 +141,8 @@
             ({{ selectedUnitTitle }})
           </span>
         </div>
-        <BigButton variant="primary" :disabled="starting" @click="handleStart">
-          🚀 開始複習！
+        <BigButton variant="primary" :disabled="!canStart" @click="handleStart">
+          {{ starting ? '準備題目中…' : '🚀 開始複習！' }}
         </BigButton>
       </div>
     </div>
@@ -157,21 +175,45 @@ const currentSubject = computed(() => {
   return subjects.value.find((s) => s.id === selectedSubjectId.value);
 });
 
+/** 回數標題形如「第 1 回：家鄉的地圖與運用 (1) [p.2-3]」，拆成回數 / 名稱 / 頁碼 */
+const unitItems = computed(() =>
+  (currentSubject.value?.units ?? []).map((u, idx) => {
+    const m = u.title.match(/^第\s*(\d+)\s*回\s*[:：]?\s*(.*?)\s*(?:\[\s*(p\.[^\]]+)\])?\s*$/);
+    return {
+      ...u,
+      no: m ? Number(m[1]) : idx + 1,
+      name: m ? m[2] : u.title,
+      pages: m?.[3] ?? '',
+      pct: u.total ? Math.round((u.mastered / u.total) * 100) : 0,
+      done: u.total > 0 && u.mastered >= u.total,
+    };
+  })
+);
+
 const selectedUnitTitle = computed(() => {
-  return currentSubject.value?.units.find((u) => u.id === selectedUnitId.value)?.title || '';
+  const u = unitItems.value.find((u) => u.id === selectedUnitId.value);
+  return u ? `第 ${u.no} 回 · ${u.name}` : '';
 });
+
+const canStart = computed(
+  () => !starting.value && (mode.value !== 'progress' || !!selectedUnitId.value)
+);
+
+/** 換科目時，回數改選該科第一個還沒熟練的回數，避免送出別科的回數 */
+function selectSubject(id: string) {
+  selectedSubjectId.value = id;
+  const units = subjects.value.find((s) => s.id === id)?.units ?? [];
+  selectedUnitId.value = (units.find((u) => u.mastered < u.total) ?? units[0])?.id ?? '';
+}
 
 onMounted(async () => {
   subjects.value = await api.fetchSubjects(props.student.id);
-  if (subjects.value.length > 0) {
-    selectedSubjectId.value = subjects.value[0].id;
-    if (subjects.value[0].units.length > 0) {
-      selectedUnitId.value = subjects.value[0].units[0].id;
-    }
-  }
+  const first = subjects.value.find((s) => s.units.length > 0) ?? subjects.value[0];
+  if (first) selectSubject(first.id);
 });
 
 async function handleStart() {
+  if (!canStart.value) return;
   starting.value = true;
   try {
     const s = await api.startSession({

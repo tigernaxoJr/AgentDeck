@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col px-4 pb-28">
+  <div class="h-screen overflow-y-auto bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col px-4 pb-28">
     <!-- Top Navigation Bar -->
     <header class="max-w-4xl w-full mx-auto flex items-center justify-between py-4 border-b border-stone-200 dark:border-stone-800">
       <div class="flex items-center gap-3">

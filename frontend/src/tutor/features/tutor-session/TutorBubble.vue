@@ -40,14 +40,14 @@
         <span class="flex gap-1.5">
           <span class="dot" /><span class="dot [animation-delay:150ms]" /><span class="dot [animation-delay:300ms]" />
         </span>
-        老師想一下…
+        {{ thinkingText }}
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
 import type { DialogTurnView } from '../../shared/types';
 
 const props = defineProps<{
@@ -56,6 +56,27 @@ const props = defineProps<{
 }>();
 
 const scrollRef = ref<HTMLDivElement | null>(null);
+
+/** AI 批改可能要二、三十秒，依等待時間換句話，讓孩子知道還在處理 */
+const waitedSec = ref(0);
+let waitTimer: ReturnType<typeof setInterval> | undefined;
+
+watch(
+  () => props.thinking,
+  (on) => {
+    clearInterval(waitTimer);
+    waitedSec.value = 0;
+    if (on) waitTimer = setInterval(() => waitedSec.value++, 1000);
+  },
+  { immediate: true }
+);
+onUnmounted(() => clearInterval(waitTimer));
+
+const thinkingText = computed(() => {
+  if (waitedSec.value < 6) return '老師想一下…';
+  if (waitedSec.value < 15) return '老師正在仔細看你的答案…';
+  return '快好了，再等一下下…';
+});
 
 watch(
   () => [props.dialog.length, props.thinking],

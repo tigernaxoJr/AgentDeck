@@ -68,41 +68,52 @@
     <!-- Session -->
     <main v-else-if="session?.question" class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto lg:overflow-hidden">
       <!-- Left: question & answer -->
-      <section class="lg:col-span-7 flex flex-col gap-5 lg:min-h-0">
-        <div ref="questionScrollRef" class="flex flex-col gap-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-2">
+      <section class="lg:col-span-7 xl:col-span-8 flex flex-col lg:min-h-0">
+        <div ref="questionScrollRef" class="flex flex-col gap-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-2 pb-2">
           <QuestionCard :key="session.question.id" :question="session.question" />
-          <BookRefCallout :book-ref="currentBookRef" />
 
-          <div
-            v-if="canNext && lastReply?.reveal"
-            class="bg-emerald-50 dark:bg-emerald-950/40 border-l-8 border-emerald-500 rounded-2xl px-5 py-4 flex flex-col gap-2"
-          >
-            <span class="text-lg font-bold text-emerald-700 dark:text-emerald-400">正確答案</span>
-            <span class="text-3xl font-black text-emerald-900 dark:text-emerald-200">{{ revealText }}</span>
-            <p v-if="lastReply.reveal.explanation" class="text-xl text-emerald-900 dark:text-emerald-200 leading-relaxed">
-              {{ lastReply.reveal.explanation }}
-            </p>
-          </div>
-        </div>
-
-        <div class="shrink-0">
           <AnswerPanel
             ref="answerPanelRef"
             :key="session.question.id"
             :question="session.question"
             :disabled="aiThinking || loading"
             :locked="canNext"
-            :is-last="isLast"
-            :verdict="lastReply?.verdict"
-            :correct-choice="lastReply?.reveal?.choice"
+            :reply="lastReply"
             @submit="submitAnswer"
-            @next="next"
           />
+
+          <!-- 批改結果 -->
+          <div v-if="feedback" ref="feedbackRef" :key="feedbackKey" class="feedback-in flex flex-col gap-3">
+            <div :class="['rounded-2xl border-l-8 px-5 py-4 flex flex-col gap-2', FEEDBACK_TONES[feedback.tone]]">
+              <span class="text-2xl font-black">{{ feedback.title }}</span>
+              <span v-if="feedback.answer" class="text-3xl font-black">{{ feedback.answer }}</span>
+              <p v-if="feedback.explanation" class="text-xl leading-relaxed">{{ feedback.explanation }}</p>
+            </div>
+            <BookRefCallout v-if="feedback.tone === 'bad'" :book-ref="hintBookRef" />
+          </div>
+        </div>
+
+        <!-- 作答列：固定在底部，不會被長題目擠出畫面 -->
+        <div class="shrink-0 flex items-center justify-between gap-4 pt-4 border-t-2 border-stone-200 dark:border-stone-800">
+          <p class="text-lg text-stone-500 dark:text-stone-400">
+            {{ canNext ? '按 Enter 繼續' : answerPanelRef?.hint }}
+          </p>
+          <BigButton v-if="canNext" variant="primary" :disabled="loading" @click="next">
+            {{ isLast ? '完成複習 🎉' : '下一題 ➔' }}
+          </BigButton>
+          <BigButton
+            v-else
+            variant="primary"
+            :disabled="aiThinking || loading || !answerPanelRef?.hasAnswer"
+            @click="answerPanelRef?.submit()"
+          >
+            {{ aiThinking ? '老師批改中…' : '送出答案' }}
+          </BigButton>
         </div>
       </section>
 
       <!-- Right: tutor chat -->
-      <aside class="lg:col-span-5 min-h-[420px] lg:min-h-0 flex flex-col bg-white dark:bg-stone-900 rounded-3xl shadow-sm border-2 border-stone-200 dark:border-stone-800 overflow-hidden">
+      <aside class="lg:col-span-5 xl:col-span-4 min-h-[420px] lg:min-h-0 flex flex-col bg-white dark:bg-stone-900 rounded-3xl shadow-sm border-2 border-stone-200 dark:border-stone-800 overflow-hidden">
         <div class="px-5 py-3 border-b-2 border-stone-100 dark:border-stone-800 text-lg font-bold text-stone-500 dark:text-stone-400">
           家教老師
         </div>
@@ -228,20 +239,54 @@ const {
   sendStudentMessage,
 } = useTutorSession(sessionId);
 
-const currentBookRef = computed(() => {
-  // If student already answered correctly and can proceed, don't nag with book callout
-  if (canNext.value && lastReply.value?.verdict === 'correct') {
-    return undefined;
-  }
-  const q = session.value?.question;
-  return lastReply.value?.bookRef || (q?.bookPage ? { page: q.bookPage, where: q.bookWhere || '' } : undefined);
-});
+const feedbackRef = ref<HTMLDivElement | null>(null);
+
+type FeedbackTone = 'good' | 'bad' | 'warn' | 'reveal';
+const FEEDBACK_TONES: Record<FeedbackTone, string> = {
+  good: 'bg-emerald-50 border-emerald-500 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100',
+  reveal: 'bg-sky-50 border-sky-500 text-sky-950 dark:bg-sky-950/40 dark:text-sky-100',
+  bad: 'bg-rose-50 border-rose-400 text-rose-900 dark:bg-rose-950/40 dark:text-rose-100',
+  warn: 'bg-amber-50 border-amber-500 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100',
+};
 
 const revealText = computed(() => {
   const r = lastReply.value?.reveal;
   if (!r) return '';
   if (typeof r.choice === 'boolean') return r.choice ? '⭕ 對' : '❌ 錯';
   return r.answer;
+});
+
+/** 左側的批改結果卡；老師的完整說明在右側對話 */
+const feedback = computed<{ tone: FeedbackTone; title: string; answer?: string; explanation?: string } | null>(() => {
+  const r = lastReply.value;
+  if (!r) return null;
+  const isChoice = session.value?.question?.inputMode === 'choice';
+  if (canNext.value) {
+    if (r.verdict === 'correct') {
+      // 選擇題的正解已在選項上打勾，不再重複
+      return { tone: 'good', title: '🎉 答對了！', answer: isChoice ? '' : revealText.value, explanation: r.reveal?.explanation };
+    }
+    return { tone: 'reveal', title: '💡 正確答案', answer: revealText.value, explanation: r.reveal?.explanation };
+  }
+  switch (r.verdict) {
+    case 'incorrect':
+      return { tone: 'bad', title: '還不對喔！看看老師的提示，再試一次 💪' };
+    case 'partial':
+      return { tone: 'warn', title: '有一部分對了，再想想看還少了什麼！' };
+    case 'unreadable':
+      return { tone: 'warn', title: '字跡有點看不清楚，寫大一點再試一次！' };
+    default:
+      return null;
+  }
+});
+
+/** 每次批改都換 key，重播進場動畫 */
+const feedbackKey = ref(0);
+
+/** 答錯時才提示翻課本；題目卡上已標示頁碼 */
+const hintBookRef = computed(() => {
+  const q = session.value?.question;
+  return lastReply.value?.bookRef || (q?.bookPage ? { page: q.bookPage, where: q.bookWhere || '' } : undefined);
 });
 
 /** 已完成的題數占比；本題揭曉後算完成 */
@@ -252,11 +297,21 @@ const progressPct = computed(() => {
   return Math.round((done / s.total) * 100);
 });
 
-// 揭曉答案時把解答卡捲進畫面
-watch(canNext, async (v) => {
-  if (!v) return;
+// 換題時回到頂端，否則會停在上一題的捲動位置
+watch(
+  () => session.value?.question?.id,
+  async () => {
+    await nextTick();
+    questionScrollRef.value?.scrollTo({ top: 0 });
+  }
+);
+
+// 批改結果出來時把結果卡捲進畫面
+watch(lastReply, async (r) => {
+  if (!r) return;
+  feedbackKey.value++;
   await nextTick();
-  questionScrollRef.value?.scrollTo({ top: questionScrollRef.value.scrollHeight, behavior: 'smooth' });
+  feedbackRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
 onMounted(() => {
@@ -292,3 +347,16 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 </script>
+
+<style scoped>
+.feedback-in {
+  animation: feedback-in 0.3s ease-out;
+}
+@keyframes feedback-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feedback-in { animation: none; }
+}
+</style>

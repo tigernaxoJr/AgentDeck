@@ -8,13 +8,41 @@
         {{ question.section }}
       </span>
       <span v-if="question.bookPage" class="ml-auto text-stone-500 dark:text-stone-400">
-        📖 課本第 {{ question.bookPage }} 頁
+        📖 課本第 {{ question.bookPage }} 頁<template v-if="question.bookWhere"> · {{ question.bookWhere }}</template>
       </span>
     </div>
 
-    <h2 class="text-3xl md:text-4xl font-bold text-stone-900 dark:text-stone-100 leading-relaxed tracking-wide">
-      {{ question.stem }}
-    </h2>
+    <div :class="['flex flex-col gap-3 font-bold text-stone-900 dark:text-stone-100 leading-relaxed tracking-wide', stemSize]">
+      <template v-for="(block, i) in stemBlocks" :key="i">
+        <p v-if="block.kind === 'text'" class="whitespace-pre-line">{{ block.text }}</p>
+        <div v-else class="overflow-x-auto">
+          <table class="border-collapse text-[0.8em] text-center">
+            <thead>
+              <tr>
+                <th
+                  v-for="(cell, j) in block.head"
+                  :key="j"
+                  class="border-2 border-stone-300 dark:border-stone-600 bg-amber-50 dark:bg-stone-700 px-4 py-2"
+                >
+                  {{ cell }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, r) in block.rows" :key="r">
+                <td
+                  v-for="(cell, j) in row"
+                  :key="j"
+                  :class="['border-2 border-stone-300 dark:border-stone-600 px-4 py-2', j === 0 && 'bg-amber-50 dark:bg-stone-700']"
+                >
+                  {{ cell }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
 
     <!-- 圖上作答時，圖片在作答區顯示，這裡不重複 -->
     <button
@@ -56,9 +84,53 @@ const showEnlarged = ref(false);
 const TYPE_LABELS: Record<string, string> = {
   true_false: '是非題',
   single_choice: '選擇題',
-  handwrite_blank: '填空題',
-  handwrite_short_answer: '簡答題',
+  fill_blank: '填空題',
+  short_answer: '簡答題',
 };
 
 const typeLabel = computed(() => TYPE_LABELS[props.question.qtype] ?? '練習題');
+
+type StemBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'table'; head: string[]; rows: string[][] };
+
+const splitRow = (line: string) =>
+  line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+
+const isDivider = (line: string) => /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(line.trim());
+
+/** 題幹可能夾帶 Markdown 表格（| a | b |），其餘保留換行 */
+const stemBlocks = computed<StemBlock[]>(() => {
+  const blocks: StemBlock[] = [];
+  const text: string[] = [];
+  const flushText = () => {
+    const t = text.join('\n').trim();
+    if (t) blocks.push({ kind: 'text', text: t });
+    text.length = 0;
+  };
+
+  const lines = props.question.stem.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim().startsWith('|')) {
+      text.push(lines[i]);
+      continue;
+    }
+    const tableLines: string[] = [];
+    while (i < lines.length && lines[i].trim().startsWith('|')) tableLines.push(lines[i++]);
+    i--;
+    const rows = tableLines.filter((l) => !isDivider(l)).map(splitRow);
+    flushText();
+    blocks.push({ kind: 'table', head: rows[0] ?? [], rows: rows.slice(1) });
+  }
+  flushText();
+  return blocks;
+});
+
+/** 題幹越長字越小，避免長題目把作答區擠出畫面 */
+const stemSize = computed(() => {
+  const len = stemBlocks.value.reduce((n, b) => n + (b.kind === 'text' ? b.text.length : 0), 0);
+  if (len <= 40) return 'text-3xl md:text-4xl';
+  if (len <= 100) return 'text-2xl md:text-3xl';
+  return 'text-xl md:text-2xl';
+});
 </script>

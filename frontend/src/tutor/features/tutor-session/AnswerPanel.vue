@@ -9,6 +9,7 @@
         v-for="c in choices"
         :key="String(c.value)"
         type="button"
+        :aria-pressed="selectedChoice === c.value"
         :class="[
           'relative rounded-3xl border-4 shadow-sm transition-all cursor-pointer disabled:cursor-default active:scale-[0.98]',
           isTrueFalse ? 'h-28 flex items-center justify-center gap-4' : 'p-4 min-h-[88px] flex items-center gap-4 text-left',
@@ -25,7 +26,7 @@
           <span
             :class="[
               'shrink-0 w-11 h-11 rounded-full text-xl font-black flex items-center justify-center',
-              selectedChoice === c.value ? 'bg-current/15' : 'bg-stone-100 dark:bg-stone-700',
+              selectedChoice === c.value && !locked ? 'bg-amber-500 text-white' : 'bg-stone-100 dark:bg-stone-700',
             ]"
           >
             {{ c.value }}
@@ -42,17 +43,14 @@
     </div>
 
     <!-- 2. Handwriting Pad (CharGrid / FreeCanvas / ImageCanvas) -->
-    <div
+    <HandwritingPad
       v-else-if="isHandwriting"
-      class="flex flex-col items-center w-full overflow-x-auto"
-    >
-      <HandwritingPad
-        ref="padRef"
-        :mode="question.inputMode as 'char_grid' | 'free_canvas' | 'image_canvas'"
-        :char-count="question.charCount || 2"
-        :bg-image-url="question.inputMode === 'image_canvas' ? question.imageUrl : ''"
-      />
-    </div>
+      ref="padRef"
+      :mode="question.inputMode as 'char_grid' | 'free_canvas' | 'image_canvas'"
+      :char-count="question.charCount || 2"
+      :bg-image-url="question.inputMode === 'image_canvas' ? question.imageUrl : ''"
+      :disabled="disabled || locked"
+    />
 
     <!-- 3. Text Input Mode -->
     <input
@@ -64,40 +62,12 @@
       :disabled="disabled || locked"
       @keyup.enter.stop="submit"
     />
-
-    <!-- Actions Bar -->
-    <div class="flex items-center justify-between gap-4">
-      <p class="text-lg text-stone-500 dark:text-stone-400">
-        <template v-if="locked">按 Enter 繼續</template>
-        <template v-else-if="question.inputMode === 'choice'">
-          {{ isTrueFalse ? '按 O（對）/ X（錯）選擇' : '按 1–' + choices.length + ' 選擇' }}，Enter 送出
-        </template>
-        <template v-else-if="isHandwriting">寫好後按 Enter 送出</template>
-      </p>
-
-      <BigButton
-        v-if="locked"
-        variant="primary"
-        @click="$emit('next')"
-      >
-        {{ isLast ? '完成複習 🎉' : '下一題 ➔' }}
-      </BigButton>
-      <BigButton
-        v-else
-        variant="primary"
-        :disabled="disabled || !hasAnswer"
-        @click="submit"
-      >
-        {{ disabled ? '老師批改中…' : '送出答案' }}
-      </BigButton>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type { ChoiceValue, QuestionView, TutorReply } from '../../shared/types';
-import BigButton from '../../shared/BigButton.vue';
 import HandwritingPad from './HandwritingPad.vue';
 import type { AnswerPayload } from './useTutorSession';
 
@@ -106,20 +76,19 @@ const props = defineProps<{
   disabled?: boolean;
   /** 本題已揭曉，鎖住作答 */
   locked?: boolean;
-  isLast?: boolean;
-  verdict?: TutorReply['verdict'];
-  /** 揭曉後的正解，用來標出正確選項 */
-  correctChoice?: ChoiceValue;
+  /** 最近一次批改結果；揭曉時 reveal.choice 用來標出正確選項 */
+  reply?: TutorReply | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'submit', payload: AnswerPayload): void;
-  (e: 'next'): void;
 }>();
 
 const selectedChoice = ref<ChoiceValue | null>(null);
-/** 最近一次送出的選項；選項改變後就不再顯示對錯標記 */
+/** 最近一次送出的選項，等批改結果回來後歸類 */
 const submittedChoice = ref<ChoiceValue | null>(null);
+/** 本題已經答錯過的選項，重試時保留 ❌ 提醒 */
+const wrongChoices = ref<ChoiceValue[]>([]);
 const textInput = ref('');
 const padRef = ref<InstanceType<typeof HandwritingPad> | null>(null);
 
@@ -143,29 +112,53 @@ const hasAnswer = computed(() => {
   }
 });
 
-function showsVerdict(val: ChoiceValue) {
-  return val === selectedChoice.value && val === submittedChoice.value && !!props.verdict;
-}
+/** 鍵盤提示，顯示在作答列 */
+const hint = computed(() => {
+  switch (props.question.inputMode) {
+    case 'choice':
+      return `${isTrueFalse.value ? '按 O（對）/ X（錯）選擇' : `按 1–${choices.value.length} 選擇`}，Enter 送出`;
+    case 'text':
+      return '打好後按 Enter 送出';
+    default:
+      return '寫好後按 Enter 送出，Z 復原、C 清除';
+  }
+});
 
-function isRevealedCorrect(val: ChoiceValue) {
-  return !!props.locked && props.correctChoice === val;
-}
+const verdict = computed(() => props.reply?.verdict);
+
+watch(
+  () => props.reply,
+  (r) => {
+    if (r?.verdict !== 'incorrect' || submittedChoice.value === null) return;
+    if (!wrongChoices.value.includes(submittedChoice.value)) wrongChoices.value.push(submittedChoice.value);
+    // 答錯就取消選取，讓孩子重新選
+    if (selectedChoice.value === submittedChoice.value) selectedChoice.value = null;
+  }
+);
+
+const isCorrectPick = (val: ChoiceValue) =>
+  verdict.value === 'correct' && val === submittedChoice.value && val === selectedChoice.value;
+
+const isRevealedCorrect = (val: ChoiceValue) => !!props.locked && props.reply?.reveal?.choice === val;
 
 function markFor(val: ChoiceValue) {
-  if (isRevealedCorrect(val)) return '✅';
-  if (!showsVerdict(val)) return '';
-  return props.verdict === 'correct' ? '✅' : props.verdict === 'incorrect' ? '❌' : '';
+  if (isRevealedCorrect(val) || isCorrectPick(val)) return '✅';
+  if (wrongChoices.value.includes(val)) return '❌';
+  return '';
 }
 
 function choiceClass(val: ChoiceValue) {
-  if (isRevealedCorrect(val) || (showsVerdict(val) && props.verdict === 'correct')) {
-    return 'border-emerald-500 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-100';
+  if (isRevealedCorrect(val) || isCorrectPick(val)) {
+    return 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-4 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-900';
   }
-  if (showsVerdict(val) && props.verdict === 'incorrect') {
-    return 'border-rose-400 bg-rose-50 text-rose-900 dark:bg-rose-950/50 dark:text-rose-100';
+  if (selectedChoice.value === val && !props.locked) {
+    return 'border-amber-500 bg-amber-100 text-amber-950 ring-4 ring-amber-200 shadow-md dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-900';
   }
-  if (selectedChoice.value === val) {
-    return 'border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100 shadow-md';
+  if (wrongChoices.value.includes(val)) {
+    return 'border-rose-300 bg-rose-50 text-rose-900/70 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200/70';
+  }
+  if (props.locked) {
+    return 'border-stone-200 bg-white text-stone-400 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-500';
   }
   return 'border-stone-200 bg-white text-stone-800 hover:border-amber-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100 dark:hover:border-amber-700 disabled:hover:border-stone-200';
 }
@@ -199,6 +192,8 @@ function submit() {
 }
 
 defineExpose({
+  hasAnswer,
+  hint,
   clear() {
     if (props.locked) return;
     selectedChoice.value = null;
@@ -206,6 +201,7 @@ defineExpose({
     padRef.value?.clear();
   },
   undo() {
+    if (props.locked) return;
     padRef.value?.undo();
   },
   selectChoice,
