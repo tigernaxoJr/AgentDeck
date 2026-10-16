@@ -172,5 +172,6 @@ async fn ask_tutor(
         reveal: None,
         can_next: session.can_next(),
         self_grade_available: Some(false),
+        hint_pending: None,
     }))
 }

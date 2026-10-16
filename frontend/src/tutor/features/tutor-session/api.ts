@@ -28,6 +28,16 @@ export async function postSelfGrade(id: string, payload: {
   });
 }
 
+export async function postHint(id: string, payload: {
+  question_id: string;
+  action: string;
+}): Promise<TutorReply> {
+  return tutorFetch<TutorReply>(`/api/tutor/sessions/${id}/hint`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function postMessage(id: string, payload: {
   question_id: string;
   text: string;

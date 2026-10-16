@@ -23,6 +23,11 @@ export function useTutorSession(sessionId: string) {
   const aiThinking = ref(false);
   const selfGradeModal = ref(false);
   const lastReply = ref<TutorReply | null>(null);
+  /** 每次批改結果的序號，用來判斷背景提示是否已過時 */
+  let replySeq = 0;
+  /** 正在背景等老師提示的批改序號；0 表示沒有 */
+  const hintSeq = ref(0);
+  const hintLoading = computed(() => hintSeq.value !== 0);
   const askText = ref('');
   const summary = ref<SessionSummary | null>(null);
   const toast = ref('');
@@ -62,12 +67,18 @@ export function useTutorSession(sessionId: string) {
       });
 
       lastReply.value = reply;
+      replySeq++;
+      hintSeq.value = 0;
       session.value.qState = reply.qState;
-      session.value.dialog.push({
-        role: 'tutor',
-        content: reply.say,
-        bookRef: reply.bookRef,
-      });
+      if (reply.hintPending) {
+        loadHint(session.value.question.id, reply);
+      } else {
+        session.value.dialog.push({
+          role: 'tutor',
+          content: reply.say,
+          bookRef: reply.bookRef,
+        });
+      }
 
       if (reply.selfGradeAvailable) {
         selfGradeModal.value = true;
@@ -84,6 +95,28 @@ export function useTutorSession(sessionId: string) {
     }
   }
 
+  /** 對錯已經先顯示，老師的提示在背景補上；取不到就用 reply.say 的備用提示 */
+  async function loadHint(questionId: string, reply: TutorReply) {
+    const seq = (hintSeq.value = replySeq);
+    let say = reply.say;
+    let bookRef = reply.bookRef;
+    try {
+      const hint = await api.postHint(sessionId, { question_id: questionId, action: reply.action });
+      say = hint.say;
+      bookRef = hint.bookRef ?? bookRef;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      // 孩子已經重答或換題，舊提示就不插進對話
+      if (hintSeq.value === seq) {
+        hintSeq.value = 0;
+        if (session.value?.question?.id === questionId) {
+          session.value.dialog.push({ role: 'tutor', content: say, bookRef });
+        }
+      }
+    }
+  }
+
   async function selfGrade(correct: boolean) {
     if (!session.value?.question) return;
     try {
@@ -93,6 +126,8 @@ export function useTutorSession(sessionId: string) {
       });
       selfGradeModal.value = false;
       lastReply.value = reply;
+      replySeq++;
+      hintSeq.value = 0;
       session.value.qState = reply.qState;
       session.value.dialog.push({ role: 'tutor', content: reply.say });
     } catch (e) {
@@ -107,6 +142,7 @@ export function useTutorSession(sessionId: string) {
     try {
       session.value = await api.postNext(sessionId);
       lastReply.value = null;
+      hintSeq.value = 0;
     } catch (e) {
       showError(e, '切換下一題失敗');
     } finally {
@@ -160,6 +196,7 @@ export function useTutorSession(sessionId: string) {
     session,
     loading,
     aiThinking,
+    hintLoading,
     selfGradeModal,
     lastReply,
     askText,

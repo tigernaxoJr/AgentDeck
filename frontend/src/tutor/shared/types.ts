@@ -55,6 +55,8 @@ export interface TutorReply {
   reveal?: RevealInfo;
   canNext: boolean;
   selfGradeAvailable?: boolean;
+  /** 答錯時先回對錯，老師的提示要另外呼叫 /hint 取得；say 是取不到時的備用提示 */
+  hintPending?: boolean;
 }
 
 export interface StudentItem {

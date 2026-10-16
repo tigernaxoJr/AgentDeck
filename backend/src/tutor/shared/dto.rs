@@ -113,4 +113,7 @@ pub struct TutorReply {
     pub can_next: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_grade_available: Option<bool>,
+    /// 答錯時先回對錯，AI 提示待前端呼叫 /hint 取得
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint_pending: Option<bool>,
 }

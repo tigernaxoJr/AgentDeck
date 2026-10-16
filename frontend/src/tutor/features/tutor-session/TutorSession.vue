@@ -118,7 +118,7 @@
           家教老師
         </div>
 
-        <TutorBubble :dialog="session.dialog" :thinking="aiThinking" class="flex-1 min-h-0 px-4 py-4" />
+        <TutorBubble :dialog="session.dialog" :thinking="aiThinking || hintLoading" class="flex-1 min-h-0 px-4 py-4" />
 
         <form
           class="flex items-center gap-2 p-3 border-t-2 border-stone-100 dark:border-stone-800"
@@ -224,6 +224,7 @@ const {
   session,
   loading,
   aiThinking,
+  hintLoading,
   selfGradeModal,
   lastReply,
   askText,

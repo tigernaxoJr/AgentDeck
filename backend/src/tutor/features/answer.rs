@@ -36,6 +36,13 @@ pub struct AnswerReq {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HintReq {
+    pub question_id: String,
+    /// 作答回覆的 action：hint | explain
+    pub action: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SelfGradeReq {
     pub question_id: String,
     pub correct: bool,
@@ -45,6 +52,7 @@ pub fn routes() -> Router<TutorState> {
     Router::new()
         .route("/sessions/{id}/answer", post(handle_answer))
         .route("/sessions/{id}/self_grade", post(handle_self_grade))
+        .route("/sessions/{id}/hint", post(handle_hint))
 }
 
 struct SessionUnlocker {
@@ -173,6 +181,7 @@ async fn handle_answer(
                 reveal: Some(RevealInfo::for_question(&q)),
                 can_next: false,
                 self_grade_available: Some(true),
+                hint_pending: None,
             }));
         }
 
@@ -231,11 +240,12 @@ async fn handle_answer(
     // 4. Session state transition
     let step = session.apply_verdict(verdict, now);
 
-    // 5. Teaching AI if wrong & rule-graded
-    let mut tutor_say = String::new();
+    // 5. Tutor reply (rule-graded wrong answers get the AI hint via /hint)
+    let tutor_say: String;
     let tutor_action = serde_json::to_string(&step.action).unwrap().trim_matches('"').to_string();
     let mut book_ref = None;
     let mut followup_q = None;
+    let mut hint_pending = false;
 
     if let Some(ref fb) = ai_feedback {
         tutor_say = fb.say.clone();
@@ -251,47 +261,11 @@ async fn handle_answer(
                 tutor_say = canned_praise().to_string();
             }
             TeachAction::Hint | TeachAction::Explain => {
-                // Call AI for wrong choice/explanation if engines available
-                let engines = state.ai.engines_for(AiPurpose::TutorWrong).await;
-                if !engines.is_empty() {
-                    let choice_str = choice_desc.clone().or_else(|| payload.text.clone());
-                    let ctx = build_prompt_context(&mut conn, &session, &q, choice_str, None).await?;
-                    let run_files = vec![
-                        RunFile {
-                            name: "context.json".into(),
-                            bytes: crate::tutor::ai::prompts::build_context_json(&ctx).into_bytes(),
-                        },
-                    ];
-                    let _permit = state.ai_sem.acquire().await.map_err(|e| ApiError::Internal(e.to_string()))?;
-                    if let Ok(fb) = call_turn(
-                        &engines,
-                        AiPurpose::TutorWrong,
-                        &ctx,
-                        run_files,
-                        vec![],
-                        &state.pool,
-                        Some(&session.id),
-                        Duration::from_secs(90),
-                    ).await {
-                        tutor_say = fb.say;
-                        book_ref = fb.book_ref;
-                        followup_q = fb.followup_question;
-                    }
-                }
-
-                if tutor_say.is_empty() {
-                    let default_br = q.book_page.map(|p| BookRef {
-                        page: p,
-                        where_clause: q.book_where.clone().unwrap_or_default(),
-                    });
-                    if step.action == TeachAction::Hint {
-                        tutor_say = canned_wrong_hint(default_br.as_ref());
-                        book_ref = default_br;
-                    } else {
-                        tutor_say = canned_wrong_explain(&answer_display(&q), &q.explanation);
-                        book_ref = default_br;
-                    }
-                }
+                // 規則批改馬上回對錯；AI 提示改由 /hint 另外取，避免孩子乾等
+                let (say, br) = canned_wrong_reply(&q, step.action);
+                tutor_say = say;
+                book_ref = br;
+                hint_pending = !state.ai.engines_for(AiPurpose::TutorWrong).await.is_empty();
             }
             TeachAction::RetryUnreadable => {
                 tutor_say = "字跡有點不清楚，請寫大一點、慢一點再試一次喔！".to_string();
@@ -329,24 +303,26 @@ async fn handle_answer(
     .await
     .map_err(ApiError::from)?;
 
-    // Insert dialog turn
-    let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
-    sqlx::query(
-        r#"
-        INSERT INTO dialog_turns (
-            session_id, question_id, role, content, action, book_ref_json, created_at
-        ) VALUES (?, ?, 'tutor', ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&session.id)
-    .bind(&q.id)
-    .bind(&tutor_say)
-    .bind(&tutor_action)
-    .bind(br_json)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx)
-    .await
-    .map_err(ApiError::from)?;
+    // Insert dialog turn（提示待 AI 補上時，由 /hint 寫入）
+    if !hint_pending {
+        let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
+        sqlx::query(
+            r#"
+            INSERT INTO dialog_turns (
+                session_id, question_id, role, content, action, book_ref_json, created_at
+            ) VALUES (?, ?, 'tutor', ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&session.id)
+        .bind(&q.id)
+        .bind(&tutor_say)
+        .bind(&tutor_action)
+        .bind(br_json)
+        .bind(now.to_rfc3339())
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+    }
 
     // Save session
     save_session(&mut *tx, &session).await.map_err(ApiError::from)?;
@@ -405,6 +381,7 @@ async fn handle_answer(
         reveal,
         can_next: session.can_next(),
         self_grade_available: Some(self_grade_available),
+        hint_pending: hint_pending.then_some(true),
     }))
 }
 
@@ -495,7 +472,122 @@ async fn handle_self_grade(
         reveal,
         can_next: session.can_next(),
         self_grade_available: Some(false),
+        hint_pending: None,
     }))
+}
+
+/// 規則批改答錯後的 AI 提示；AI 失敗或沒有引擎時回罐頭提示，一定寫入對話紀錄
+async fn handle_hint(
+    State(state): State<TutorState>,
+    Path(id): Path<String>,
+    Json(payload): Json<HintReq>,
+) -> Result<Json<TutorReply>, ApiError> {
+    let action = match payload.action.as_str() {
+        "hint" => TeachAction::Hint,
+        "explain" => TeachAction::Explain,
+        _ => return Err(ApiError::BadRequest("action must be hint or explain".into())),
+    };
+
+    let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
+    let session = load_session(&mut *conn, &id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
+
+    let q = load_question(&mut *conn, &payload.question_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
+
+    let last_input: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT input_text FROM attempts WHERE session_id = ? AND question_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&session.id)
+    .bind(&q.id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(ApiError::from)?;
+    let choice_str = last_input.and_then(|(t,)| t);
+
+    let (mut say, mut book_ref) = canned_wrong_reply(&q, action);
+    let mut followup_q = None;
+
+    let engines = state.ai.engines_for(AiPurpose::TutorWrong).await;
+    if !engines.is_empty() {
+        let ctx = build_prompt_context(&mut conn, &session, &q, choice_str, None).await?;
+        let run_files = vec![RunFile {
+            name: "context.json".into(),
+            bytes: crate::tutor::ai::prompts::build_context_json(&ctx).into_bytes(),
+        }];
+        let _permit = state.ai_sem.acquire().await.map_err(|e| ApiError::Internal(e.to_string()))?;
+        match call_turn(
+            &engines,
+            AiPurpose::TutorWrong,
+            &ctx,
+            run_files,
+            vec![],
+            &state.pool,
+            Some(&session.id),
+            Duration::from_secs(90),
+        )
+        .await
+        {
+            Ok(fb) if !fb.say.trim().is_empty() => {
+                say = fb.say;
+                book_ref = fb.book_ref.or(book_ref);
+                followup_q = fb.followup_question;
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[tutor] hint AI failed, using canned reply: {e}"),
+        }
+    }
+
+    let action_str = serde_json::to_string(&action).unwrap().trim_matches('"').to_string();
+    let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
+    sqlx::query(
+        r#"
+        INSERT INTO dialog_turns (
+            session_id, question_id, role, content, action, book_ref_json, created_at
+        ) VALUES (?, ?, 'tutor', ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&session.id)
+    .bind(&q.id)
+    .bind(&say)
+    .bind(&action_str)
+    .bind(br_json)
+    .bind(Utc::now().to_rfc3339())
+    .execute(&mut *conn)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(TutorReply {
+        verdict: "incorrect".into(),
+        say,
+        action: action_str,
+        book_ref,
+        recognized_text: None,
+        followup_question: followup_q,
+        q_state: serde_json::to_string(&session.q_state).unwrap().trim_matches('"').into(),
+        reveal: None,
+        can_next: session.can_next(),
+        self_grade_available: None,
+        hint_pending: None,
+    }))
+}
+
+/// 答錯時的罐頭回覆：第一次給課本頁碼提示，第二次直接講解答案
+fn canned_wrong_reply(q: &Question, action: TeachAction) -> (String, Option<BookRef>) {
+    let br = q.book_page.map(|p| BookRef {
+        page: p,
+        where_clause: q.book_where.clone().unwrap_or_default(),
+    });
+    let say = if action == TeachAction::Explain {
+        canned_wrong_explain(&answer_display(q), &q.explanation)
+    } else {
+        canned_wrong_hint(br.as_ref())
+    };
+    (say, br)
 }
 
 async fn build_prompt_context(
