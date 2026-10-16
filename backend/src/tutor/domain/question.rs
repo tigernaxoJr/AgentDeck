@@ -74,12 +74,22 @@ pub struct Question {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChoiceInput<'a> {
+    /// 是非題：true = 對（O）、false = 錯（X）
+    Bool(bool),
+    /// 選擇題：0-based 選項索引
     Index(usize),
     Text(&'a str),
 }
 
 pub fn grade_choice(q: &Question, input: &ChoiceInput<'_>) -> Verdict {
     match (&q.answer, input) {
+        (Answer::TrueFalse(expected), ChoiceInput::Bool(b)) => {
+            if expected == b {
+                Verdict::Correct
+            } else {
+                Verdict::Incorrect
+            }
+        }
         (Answer::TrueFalse(expected), ChoiceInput::Text(s)) => {
             let s = s.trim();
             let is_true = s.eq_ignore_ascii_case("O") || s == "○" || s == "o";
@@ -101,8 +111,9 @@ pub fn grade_choice(q: &Question, input: &ChoiceInput<'_>) -> Verdict {
         }
         (Answer::Choice(expected_idx), ChoiceInput::Text(s)) => {
             let s = s.trim();
+            // 文字輸入的數字為 1-based（學童看到的題號）
             if let Ok(num) = s.parse::<usize>() {
-                if *expected_idx == num {
+                if num >= 1 && *expected_idx == num - 1 {
                     return Verdict::Correct;
                 }
             }
@@ -117,17 +128,30 @@ pub fn grade_choice(q: &Question, input: &ChoiceInput<'_>) -> Verdict {
     }
 }
 
+fn tf_display(b: bool) -> &'static str {
+    if b { "對" } else { "錯" }
+}
+
+fn choice_display(q: &Question, idx: usize) -> String {
+    match q.options.get(idx) {
+        Some(opt) => format!("{}. {}", idx + 1, opt),
+        None => format!("{}", idx + 1),
+    }
+}
+
+/// 學童的選擇轉成人看得懂的文字（給 AI prompt 與作答紀錄）
+pub fn describe_choice(q: &Question, input: &ChoiceInput<'_>) -> String {
+    match input {
+        ChoiceInput::Bool(b) => tf_display(*b).to_string(),
+        ChoiceInput::Index(idx) => choice_display(q, *idx),
+        ChoiceInput::Text(s) => s.to_string(),
+    }
+}
+
 pub fn answer_display(q: &Question) -> String {
     match &q.answer {
-        Answer::TrueFalse(true) => "O".to_string(),
-        Answer::TrueFalse(false) => "X".to_string(),
-        Answer::Choice(idx) => {
-            if let Some(opt) = q.options.get(*idx) {
-                format!("({}) {}", idx + 1, opt)
-            } else {
-                format!("{}", idx + 1)
-            }
-        }
+        Answer::TrueFalse(b) => tf_display(*b).to_string(),
+        Answer::Choice(idx) => choice_display(q, *idx),
         Answer::Text(s) => s.clone(),
         Answer::Math { final_answer, .. } => final_answer.clone(),
     }
@@ -357,6 +381,8 @@ mod tests {
             active: true,
             updated_at: "".into(),
         };
+        assert_eq!(grade_choice(&q, &ChoiceInput::Bool(true)), Verdict::Correct);
+        assert_eq!(grade_choice(&q, &ChoiceInput::Bool(false)), Verdict::Incorrect);
         assert_eq!(grade_choice(&q, &ChoiceInput::Text("O")), Verdict::Correct);
         assert_eq!(grade_choice(&q, &ChoiceInput::Text("○")), Verdict::Correct);
         assert_eq!(grade_choice(&q, &ChoiceInput::Text("X")), Verdict::Incorrect);
@@ -389,6 +415,9 @@ mod tests {
         assert_eq!(grade_choice(&q, &ChoiceInput::Index(1)), Verdict::Correct);
         assert_eq!(grade_choice(&q, &ChoiceInput::Index(0)), Verdict::Incorrect);
         assert_eq!(grade_choice(&q, &ChoiceInput::Text("選項二")), Verdict::Correct);
+        assert_eq!(grade_choice(&q, &ChoiceInput::Text("2")), Verdict::Correct);
+        assert_eq!(grade_choice(&q, &ChoiceInput::Text("1")), Verdict::Incorrect);
+        assert_eq!(describe_choice(&q, &ChoiceInput::Index(1)), "2. 選項二");
     }
 
     #[test]

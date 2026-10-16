@@ -1,5 +1,5 @@
 import { tutorFetch } from '../../shared/http';
-import type { SessionView, TutorReply } from '../../shared/types';
+import type { ChoiceValue, SessionView, TutorReply } from '../../shared/types';
 
 export async function fetchSession(id: string): Promise<SessionView> {
   return tutorFetch<SessionView>(`/api/tutor/sessions/${id}`);
@@ -8,7 +8,7 @@ export async function fetchSession(id: string): Promise<SessionView> {
 export async function postAnswer(id: string, payload: {
   question_id: string;
   kind: 'choice' | 'text' | 'handwriting';
-  choice?: string | number;
+  choice?: ChoiceValue;
   text?: string;
   image_png_base64?: string;
 }): Promise<TutorReply> {

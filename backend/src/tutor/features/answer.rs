@@ -15,7 +15,7 @@ use crate::tutor::ai::turn::{
 };
 use crate::tutor::domain::progress::{next_mastery, update_weakness, Outcome};
 use crate::tutor::domain::question::{
-    answer_display, grade_choice, ChoiceInput, InputMode, Question, Verdict,
+    answer_display, describe_choice, grade_choice, ChoiceInput, InputMode, Question, Verdict,
 };
 use crate::tutor::domain::session::{QState, Session, Step, TeachAction};
 use crate::tutor::shared::dto::{BookRef, RevealInfo, TutorReply};
@@ -136,11 +136,14 @@ async fn handle_answer(
     let mut recognized_text = None;
     let mut ai_feedback: Option<TutorFeedback> = None;
     let mut self_grade_available = false;
+    let mut choice_desc: Option<String> = None;
 
     if is_rule_gradable {
+        // API：是非題送 true/false，選擇題送 1-based 題號
         let input = match &payload.choice {
+            Some(serde_json::Value::Bool(b)) => ChoiceInput::Bool(*b),
             Some(serde_json::Value::Number(n)) => {
-                ChoiceInput::Index(n.as_i64().unwrap_or(0).max(0) as usize)
+                ChoiceInput::Index((n.as_i64().unwrap_or(1) - 1).max(0) as usize)
             }
             Some(serde_json::Value::String(s)) => ChoiceInput::Text(s),
             _ => {
@@ -152,6 +155,7 @@ async fn handle_answer(
             }
         };
         verdict = grade_choice(&q, &input);
+        choice_desc = Some(describe_choice(&q, &input));
     } else {
         // Need AI grading
         let vision_engines = state.ai.engines_for(AiPurpose::GradeHandwriting).await;
@@ -166,10 +170,7 @@ async fn handle_answer(
                 recognized_text: None,
                 followup_question: None,
                 q_state: serde_json::to_string(&session.q_state).unwrap().trim_matches('"').into(),
-                reveal: Some(RevealInfo {
-                    answer: answer_display(&q),
-                    explanation: q.explanation.clone(),
-                }),
+                reveal: Some(RevealInfo::for_question(&q)),
                 can_next: false,
                 self_grade_available: Some(true),
             }));
@@ -249,7 +250,7 @@ async fn handle_answer(
                 // Call AI for wrong choice/explanation if engines available
                 let engines = state.ai.engines_for(AiPurpose::TutorWrong).await;
                 if !engines.is_empty() {
-                    let choice_str = payload.choice.as_ref().map(|v| v.to_string()).or_else(|| payload.text.clone());
+                    let choice_str = choice_desc.clone().or_else(|| payload.text.clone());
                     let ctx = build_prompt_context(&mut conn, &session, &q, choice_str, None).await?;
                     let run_files = vec![
                         RunFile {
@@ -299,7 +300,7 @@ async fn handle_answer(
 
     // Insert attempt
     let verdict_str = serde_json::to_string(&verdict).unwrap().trim_matches('"').to_string();
-    let input_text = payload.choice.as_ref().map(|v| v.to_string()).or(payload.text);
+    let input_text = choice_desc.or(payload.text);
     sqlx::query(
         r#"
         INSERT INTO attempts (
@@ -382,10 +383,7 @@ async fn handle_answer(
     tx.commit().await.map_err(ApiError::from)?;
 
     let reveal = if step.reveal {
-        Some(RevealInfo {
-            answer: answer_display(&q),
-            explanation: q.explanation.clone(),
-        })
+        Some(RevealInfo::for_question(&q))
     } else {
         None
     };
@@ -477,10 +475,7 @@ async fn handle_self_grade(
     };
 
     let reveal = if step.reveal {
-        Some(RevealInfo {
-            answer: answer_display(&q),
-            explanation: q.explanation.clone(),
-        })
+        Some(RevealInfo::for_question(&q))
     } else {
         None
     };

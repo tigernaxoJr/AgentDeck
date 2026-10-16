@@ -34,9 +34,14 @@ export interface SessionView {
   dialog: DialogTurnView[];
 }
 
+/** 是非題作答值為 boolean（true = 對），選擇題為 1-based 題號 */
+export type ChoiceValue = boolean | number;
+
 export interface RevealInfo {
   answer: string;
   explanation: string;
+  /** 是非/選擇題的正解 */
+  choice?: ChoiceValue;
 }
 
 export interface TutorReply {

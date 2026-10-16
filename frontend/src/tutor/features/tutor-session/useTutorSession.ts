@@ -1,37 +1,57 @@
-import { ref, onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
-import type { SessionView, TutorReply } from '../../shared/types';
+import { ref, computed } from 'vue';
+import type { ChoiceValue, SessionView, TutorReply } from '../../shared/types';
 import * as api from './api';
 
+export interface AnswerPayload {
+  kind: 'choice' | 'text' | 'handwriting';
+  choice?: ChoiceValue;
+  text?: string;
+  image_png_base64?: string;
+  /** 顯示在對話紀錄中的學童作答文字（不送後端） */
+  label: string;
+}
+
+export interface SessionSummary {
+  answered: number;
+  firstTryCorrect: number;
+  weakConcepts: string[];
+}
+
 export function useTutorSession(sessionId: string) {
-  const router = useRouter();
   const session = ref<SessionView | null>(null);
   const loading = ref(false);
   const aiThinking = ref(false);
   const selfGradeModal = ref(false);
   const lastReply = ref<TutorReply | null>(null);
-  const askModal = ref(false);
   const askText = ref('');
+  const summary = ref<SessionSummary | null>(null);
+  const toast = ref('');
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const canNext = computed(() => ['revealed', 'explained'].includes(session.value?.qState || ''));
+  const isLast = computed(() => !!session.value && session.value.index >= session.value.total);
+
+  function showError(e: unknown, fallback: string) {
+    toast.value = (e as Error)?.message || fallback;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast.value = ''), 4000);
+  }
 
   async function load() {
     loading.value = true;
     try {
       session.value = await api.fetchSession(sessionId);
-    } catch (e: any) {
-      alert(e.message || '載入題目失敗');
+    } catch (e) {
+      showError(e, '載入題目失敗');
     } finally {
       loading.value = false;
     }
   }
 
-  async function submitAnswer(payload: {
-    kind: 'choice' | 'text' | 'handwriting';
-    choice?: string | number;
-    text?: string;
-    image_png_base64?: string;
-  }) {
+  async function submitAnswer({ label, ...payload }: AnswerPayload) {
     if (!session.value?.question || aiThinking.value) return;
 
+    session.value.dialog.push({ role: 'student', content: label });
     aiThinking.value = true;
     try {
       const reply = await api.postAnswer(sessionId, {
@@ -41,8 +61,6 @@ export function useTutorSession(sessionId: string) {
 
       lastReply.value = reply;
       session.value.qState = reply.qState;
-
-      // Add to dialog list
       session.value.dialog.push({
         role: 'tutor',
         content: reply.say,
@@ -52,9 +70,9 @@ export function useTutorSession(sessionId: string) {
       if (reply.selfGradeAvailable) {
         selfGradeModal.value = true;
       }
-    } catch (e: any) {
-      if (!e.message?.includes('Conflict')) {
-        alert(e.message || '送出作答失敗');
+    } catch (e) {
+      if (!(e as Error).message?.includes('Conflict')) {
+        showError(e, '送出作答失敗');
       }
     } finally {
       aiThinking.value = false;
@@ -71,48 +89,46 @@ export function useTutorSession(sessionId: string) {
       selfGradeModal.value = false;
       lastReply.value = reply;
       session.value.qState = reply.qState;
-      session.value.dialog.push({
-        role: 'tutor',
-        content: reply.say,
-      });
-    } catch (e: any) {
-      alert(e.message || '自評失敗');
+      session.value.dialog.push({ role: 'tutor', content: reply.say });
+    } catch (e) {
+      showError(e, '自評失敗');
     }
   }
 
   async function next() {
-    if (loading.value) return;
+    if (loading.value || !canNext.value) return;
+    if (isLast.value) return finish();
     loading.value = true;
     try {
       session.value = await api.postNext(sessionId);
       lastReply.value = null;
-    } catch (e: any) {
-      alert(e.message || '切換下一題失敗');
+    } catch (e) {
+      showError(e, '切換下一題失敗');
     } finally {
       loading.value = false;
     }
   }
 
-  async function end() {
-    if (!confirm('確定要結束這次複習嗎？')) return;
+  async function finish() {
+    if (summary.value) return;
     try {
-      await api.postEnd(sessionId);
-      router.push('/tutor');
-    } catch (e: any) {
-      alert(e.message || '結束複習失敗');
+      summary.value = await api.postEnd(sessionId);
+    } catch (e) {
+      showError(e, '結束複習失敗');
     }
   }
 
+  async function end() {
+    if (!confirm('確定要結束這次複習嗎？')) return;
+    await finish();
+  }
+
   async function sendStudentMessage() {
-    if (!askText.value.trim() || !session.value?.question) return;
+    if (!askText.value.trim() || !session.value?.question || aiThinking.value) return;
     const txt = askText.value.trim();
     askText.value = '';
-    askModal.value = false;
 
-    session.value.dialog.push({
-      role: 'student',
-      content: txt,
-    });
+    session.value.dialog.push({ role: 'student', content: txt });
 
     aiThinking.value = true;
     try {
@@ -125,8 +141,8 @@ export function useTutorSession(sessionId: string) {
         content: reply.say,
         bookRef: reply.bookRef,
       });
-    } catch (e: any) {
-      alert(e.message || '問老師失敗');
+    } catch (e) {
+      showError(e, '問老師失敗');
     } finally {
       aiThinking.value = false;
     }
@@ -138,8 +154,11 @@ export function useTutorSession(sessionId: string) {
     aiThinking,
     selfGradeModal,
     lastReply,
-    askModal,
     askText,
+    summary,
+    toast,
+    canNext,
+    isLast,
     load,
     submitAnswer,
     selfGrade,

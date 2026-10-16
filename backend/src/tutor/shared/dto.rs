@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::tutor::domain::question::{InputMode, Question};
+use crate::tutor::domain::question::{answer_display, Answer, InputMode, Question};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +75,24 @@ pub struct SessionView {
 pub struct RevealInfo {
     pub answer: String,
     pub explanation: String,
+    /// 是非/選擇題的正解：是非題為 bool，選擇題為 1-based 題號
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<serde_json::Value>,
+}
+
+impl RevealInfo {
+    pub fn for_question(q: &Question) -> Self {
+        let choice = match &q.answer {
+            Answer::TrueFalse(b) => Some(serde_json::Value::Bool(*b)),
+            Answer::Choice(idx) => Some(serde_json::Value::from(idx + 1)),
+            _ => None,
+        };
+        Self {
+            answer: answer_display(q),
+            explanation: q.explanation.clone(),
+            choice,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

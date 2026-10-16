@@ -1,116 +1,160 @@
 <template>
-  <div class="min-h-screen bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col p-6 md:p-8">
+  <div class="h-screen overflow-hidden bg-[#faf6f0] dark:bg-[#1c1917] text-stone-900 dark:text-stone-100 flex flex-col">
     <!-- Header -->
-    <header class="flex items-center justify-between pb-6 border-b-2 border-stone-200 dark:border-stone-800">
-      <div class="flex items-center gap-4">
-        <h1 class="text-3xl font-black text-amber-700 dark:text-amber-500">
-          AI 家教複習
-        </h1>
-        <span v-if="session" class="text-2xl font-bold bg-stone-200 dark:bg-stone-800 px-4 py-1.5 rounded-full">
-          第 {{ session.index }} / {{ session.total }} 題
+    <header class="shrink-0 flex items-center gap-6 px-6 py-4 border-b-2 border-stone-200 dark:border-stone-800">
+      <h1 class="text-2xl font-black text-amber-700 dark:text-amber-500 whitespace-nowrap">AI 家教複習</h1>
+
+      <div v-if="session && !session.empty" class="flex-1 flex items-center gap-4 min-w-0">
+        <div class="flex-1 h-4 rounded-full bg-stone-200 dark:bg-stone-800 overflow-hidden max-w-xl">
+          <div
+            class="h-full rounded-full bg-amber-500 transition-all duration-500"
+            :style="{ width: `${progressPct}%` }"
+          />
+        </div>
+        <span class="text-xl font-bold whitespace-nowrap">
+          第 {{ session.index }} <span class="text-stone-400">/ {{ session.total }}</span> 題
         </span>
       </div>
+      <div v-else class="flex-1" />
 
-      <div class="flex items-center gap-4">
-        <button
-          type="button"
-          class="px-5 py-3 rounded-2xl bg-amber-100 hover:bg-amber-200 text-amber-900 dark:bg-amber-950 dark:text-amber-200 font-bold text-xl cursor-pointer"
-          @click="askModal = true"
-        >
-          ❓ 我不懂 (?)
-        </button>
-        <button
-          type="button"
-          class="px-5 py-3 rounded-2xl bg-stone-200 hover:bg-stone-300 dark:bg-stone-800 dark:hover:bg-stone-700 font-bold text-xl cursor-pointer"
-          @click="end"
-        >
-          結束複習
-        </button>
-      </div>
+      <button
+        v-if="!summary"
+        type="button"
+        class="px-5 py-2.5 rounded-2xl bg-stone-200 hover:bg-stone-300 dark:bg-stone-800 dark:hover:bg-stone-700 font-bold text-lg cursor-pointer"
+        @click="session?.empty ? router.push('/tutor') : end()"
+      >
+        結束複習
+      </button>
     </header>
 
-    <!-- Main Content (16:9 layout) -->
-    <main v-if="session && session.question" class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 my-6">
-      <!-- Left Column: QuestionCard & BookRef (7 cols) -->
-      <div class="lg:col-span-7 flex flex-col gap-6">
-        <QuestionCard :question="session.question" />
-        <BookRefCallout :book-ref="currentBookRef" />
-
-        <!-- Reveal explanation if revealed or explained -->
-        <div
-          v-if="['revealed', 'explained'].includes(session.qState) && lastReply?.reveal"
-          class="bg-emerald-50 dark:bg-emerald-950/40 border-3 border-emerald-500 rounded-3xl p-6 flex flex-col gap-2"
-        >
-          <span class="text-xl font-bold text-emerald-800 dark:text-emerald-300">標準答案：{{ lastReply.reveal.answer }}</span>
-          <p class="text-lg text-emerald-900 dark:text-emerald-200 leading-relaxed">{{ lastReply.reveal.explanation }}</p>
+    <!-- Finished -->
+    <main v-if="summary" class="flex-1 flex items-center justify-center p-8 overflow-y-auto">
+      <div class="bg-white dark:bg-stone-800 rounded-[2rem] shadow-sm border-2 border-stone-200 dark:border-stone-700 p-10 max-w-2xl w-full flex flex-col items-center gap-8 text-center">
+        <div class="text-7xl">🎉</div>
+        <h2 class="text-4xl font-black">這次複習完成了！</h2>
+        <div class="grid grid-cols-2 gap-4 w-full">
+          <div class="rounded-3xl bg-amber-50 dark:bg-amber-950/40 p-6">
+            <div class="text-5xl font-black text-amber-600">{{ summary.answered }}</div>
+            <div class="text-xl font-bold text-stone-600 dark:text-stone-300 mt-1">練習題數</div>
+          </div>
+          <div class="rounded-3xl bg-emerald-50 dark:bg-emerald-950/40 p-6">
+            <div class="text-5xl font-black text-emerald-600">{{ summary.firstTryCorrect }}</div>
+            <div class="text-xl font-bold text-stone-600 dark:text-stone-300 mt-1">一次就答對</div>
+          </div>
         </div>
-      </div>
-
-      <!-- Right Column: TutorBubble (5 cols) -->
-      <div class="lg:col-span-5 flex flex-col justify-between bg-white dark:bg-stone-850 rounded-3xl p-6 shadow-md border-2 border-stone-200 dark:border-stone-800">
-        <div class="flex items-center justify-between border-b-2 border-stone-100 dark:border-stone-800 pb-3 mb-2">
-          <span class="text-xl font-bold text-stone-600 dark:text-stone-300">對話紀錄</span>
-          <span v-if="aiThinking" class="text-amber-600 font-bold animate-pulse text-lg">
-            🤔 老師想一下中...
-          </span>
+        <div v-if="summary.weakConcepts.length" class="w-full text-left">
+          <div class="text-xl font-bold mb-3">下次再多看看這些：</div>
+          <div class="flex flex-wrap gap-2">
+            <span
+              v-for="c in summary.weakConcepts"
+              :key="c"
+              class="px-4 py-2 rounded-full bg-stone-100 dark:bg-stone-700 text-lg font-bold"
+            >
+              {{ c }}
+            </span>
+          </div>
         </div>
-
-        <TutorBubble :dialog="session.dialog" class="flex-1" />
+        <BigButton variant="primary" class="w-full" @click="router.push('/tutor')">回首頁</BigButton>
       </div>
     </main>
 
-    <!-- Bottom: AnswerPanel -->
-    <footer v-if="session && session.question" class="pt-4 border-t-2 border-stone-200 dark:border-stone-800">
-      <AnswerPanel
-        ref="answerPanelRef"
-        :question="session.question"
-        :disabled="aiThinking"
-        :can-next="['revealed', 'explained'].includes(session.qState)"
-        @submit="submitAnswer"
-        @next="next"
-      />
-    </footer>
+    <!-- Empty queue -->
+    <main v-else-if="session?.empty" class="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
+      <div class="text-7xl">🌟</div>
+      <p class="text-3xl font-bold">{{ session.message || '目前沒有需要複習的題目喔！' }}</p>
+      <BigButton variant="primary" @click="router.push('/tutor')">回首頁</BigButton>
+    </main>
 
-    <!-- Ask Modal -->
-    <div
-      v-if="askModal"
-      class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-    >
-      <div class="bg-white dark:bg-stone-800 rounded-3xl p-8 max-w-xl w-full shadow-2xl flex flex-col gap-6">
-        <h3 class="text-3xl font-black">有什麼不懂的地方嗎？</h3>
-        <textarea
-          v-model="askText"
-          class="w-full h-36 p-4 text-2xl rounded-2xl border-3 border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-900 focus:border-amber-500 outline-none resize-none"
-          placeholder="例如：我看不懂地圖上的圖例..."
-        />
-        <div class="flex items-center justify-end gap-4">
-          <button
-            type="button"
-            class="px-6 py-3 rounded-2xl bg-stone-200 hover:bg-stone-300 dark:bg-stone-700 text-xl font-bold"
-            @click="askModal = false"
+    <!-- Session -->
+    <main v-else-if="session?.question" class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto lg:overflow-hidden">
+      <!-- Left: question & answer -->
+      <section class="lg:col-span-7 flex flex-col gap-5 lg:min-h-0">
+        <div ref="questionScrollRef" class="flex flex-col gap-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-2">
+          <QuestionCard :key="session.question.id" :question="session.question" />
+          <BookRefCallout :book-ref="currentBookRef" />
+
+          <div
+            v-if="canNext && lastReply?.reveal"
+            class="bg-emerald-50 dark:bg-emerald-950/40 border-l-8 border-emerald-500 rounded-2xl px-5 py-4 flex flex-col gap-2"
           >
-            取消
-          </button>
-          <BigButton variant="primary" @click="sendStudentMessage">
-            發問 (Enter)
-          </BigButton>
+            <span class="text-lg font-bold text-emerald-700 dark:text-emerald-400">正確答案</span>
+            <span class="text-3xl font-black text-emerald-900 dark:text-emerald-200">{{ revealText }}</span>
+            <p v-if="lastReply.reveal.explanation" class="text-xl text-emerald-900 dark:text-emerald-200 leading-relaxed">
+              {{ lastReply.reveal.explanation }}
+            </p>
+          </div>
         </div>
-      </div>
-    </div>
+
+        <div class="shrink-0">
+          <AnswerPanel
+            ref="answerPanelRef"
+            :key="session.question.id"
+            :question="session.question"
+            :disabled="aiThinking || loading"
+            :locked="canNext"
+            :is-last="isLast"
+            :verdict="lastReply?.verdict"
+            :correct-choice="lastReply?.reveal?.choice"
+            @submit="submitAnswer"
+            @next="next"
+          />
+        </div>
+      </section>
+
+      <!-- Right: tutor chat -->
+      <aside class="lg:col-span-5 min-h-[420px] lg:min-h-0 flex flex-col bg-white dark:bg-stone-900 rounded-3xl shadow-sm border-2 border-stone-200 dark:border-stone-800 overflow-hidden">
+        <div class="px-5 py-3 border-b-2 border-stone-100 dark:border-stone-800 text-lg font-bold text-stone-500 dark:text-stone-400">
+          家教老師
+        </div>
+
+        <TutorBubble :dialog="session.dialog" :thinking="aiThinking" class="flex-1 min-h-0 px-4 py-4" />
+
+        <form
+          class="flex items-center gap-2 p-3 border-t-2 border-stone-100 dark:border-stone-800"
+          @submit.prevent="sendStudentMessage"
+        >
+          <input
+            ref="askInputRef"
+            v-model="askText"
+            type="text"
+            class="flex-1 min-w-0 px-4 py-3 text-xl rounded-2xl border-2 border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 focus:border-amber-500 outline-none"
+            placeholder="有不懂的地方？問老師… (?)"
+            :disabled="aiThinking"
+            @keydown.esc="($event.target as HTMLInputElement).blur()"
+          />
+          <button
+            type="submit"
+            class="px-5 py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white text-xl font-bold cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            :disabled="aiThinking || !askText.trim()"
+          >
+            發問
+          </button>
+        </form>
+      </aside>
+    </main>
+
+    <!-- Loading -->
+    <main v-else class="flex-1 flex flex-col items-center justify-center gap-6 text-2xl text-stone-400">
+      <template v-if="loading">題目載入中…</template>
+      <template v-else>
+        <span>題目載入失敗</span>
+        <BigButton variant="secondary" @click="load">再試一次</BigButton>
+      </template>
+    </main>
 
     <!-- Self Grade Modal -->
     <div
       v-if="selfGradeModal && lastReply?.reveal"
-      class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
     >
       <div class="bg-white dark:bg-stone-800 rounded-3xl p-8 max-w-xl w-full shadow-2xl flex flex-col gap-6 text-center">
         <h3 class="text-3xl font-black">自己對答案</h3>
         <div class="p-6 bg-stone-100 dark:bg-stone-900 rounded-2xl text-left">
-          <div class="text-xl font-bold mb-2">標準答案：</div>
-          <div class="text-3xl font-black text-amber-600 mb-4">{{ lastReply.reveal.answer }}</div>
+          <div class="text-lg font-bold text-stone-500 mb-1">正確答案</div>
+          <div class="text-3xl font-black text-amber-600 mb-3">{{ lastReply.reveal.answer }}</div>
           <div class="text-lg text-stone-600 dark:text-stone-300">{{ lastReply.reveal.explanation }}</div>
         </div>
-        <p class="text-xl font-bold">對照你的手寫答案，你覺得你答對了嗎？</p>
+        <p class="text-xl font-bold">對照你寫的答案，你覺得答對了嗎？</p>
         <div class="grid grid-cols-2 gap-4">
           <button
             type="button"
@@ -129,12 +173,28 @@
         </div>
       </div>
     </div>
+
+    <!-- Error toast -->
+    <Transition
+      enter-from-class="opacity-0 translate-y-4"
+      leave-to-class="opacity-0 translate-y-4"
+      enter-active-class="transition duration-200"
+      leave-active-class="transition duration-200"
+    >
+      <div
+        v-if="toast"
+        role="alert"
+        class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-2xl bg-rose-600 text-white text-xl font-bold shadow-xl"
+      >
+        {{ toast }}
+      </div>
+    </Transition>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useTutorSession } from './useTutorSession';
 import QuestionCard from './QuestionCard.vue';
 import BookRefCallout from './BookRefCallout.vue';
@@ -143,8 +203,11 @@ import AnswerPanel from './AnswerPanel.vue';
 import BigButton from '../../shared/BigButton.vue';
 
 const route = useRoute();
+const router = useRouter();
 const sessionId = route.params.id as string;
 const answerPanelRef = ref<InstanceType<typeof AnswerPanel> | null>(null);
+const askInputRef = ref<HTMLInputElement | null>(null);
+const questionScrollRef = ref<HTMLDivElement | null>(null);
 
 const {
   session,
@@ -152,8 +215,11 @@ const {
   aiThinking,
   selfGradeModal,
   lastReply,
-  askModal,
   askText,
+  summary,
+  toast,
+  canNext,
+  isLast,
   load,
   submitAnswer,
   selfGrade,
@@ -163,10 +229,30 @@ const {
 } = useTutorSession(sessionId);
 
 const currentBookRef = computed(() => {
-  return lastReply.value?.bookRef || (session.value?.question?.bookPage ? {
-    page: session.value.question.bookPage,
-    where: session.value.question.bookWhere || '',
-  } : undefined);
+  const q = session.value?.question;
+  return lastReply.value?.bookRef || (q?.bookPage ? { page: q.bookPage, where: q.bookWhere || '' } : undefined);
+});
+
+const revealText = computed(() => {
+  const r = lastReply.value?.reveal;
+  if (!r) return '';
+  if (typeof r.choice === 'boolean') return r.choice ? '⭕ 對' : '❌ 錯';
+  return r.answer;
+});
+
+/** 已完成的題數占比；本題揭曉後算完成 */
+const progressPct = computed(() => {
+  const s = session.value;
+  if (!s || !s.total) return 0;
+  const done = s.index - 1 + (canNext.value ? 1 : 0);
+  return Math.round((done / s.total) * 100);
+});
+
+// 揭曉答案時把解答卡捲進畫面
+watch(canNext, async (v) => {
+  if (!v) return;
+  await nextTick();
+  questionScrollRef.value?.scrollTo({ top: questionScrollRef.value.scrollHeight, behavior: 'smooth' });
 });
 
 onMounted(() => {
@@ -179,30 +265,26 @@ onUnmounted(() => {
 });
 
 function handleGlobalKeydown(e: KeyboardEvent) {
-  if (['input', 'textarea'].includes((e.target as HTMLElement).tagName.toLowerCase())) {
-    return;
-  }
+  const tag = (e.target as HTMLElement).tagName.toLowerCase();
+  if (['input', 'textarea'].includes(tag) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (summary.value || selfGradeModal.value || !session.value?.question) return;
 
+  const key = e.key.toLowerCase();
   if (e.key === 'Enter') {
     e.preventDefault();
-    if (['revealed', 'explained'].includes(session.value?.qState || '')) {
-      next();
-    } else {
-      answerPanelRef.value?.submit();
-    }
-  } else if (e.key.toLowerCase() === 'c') {
+    if (canNext.value) next();
+    else answerPanelRef.value?.submit();
+  } else if (key === 'c') {
     answerPanelRef.value?.clear();
-  } else if (e.key.toLowerCase() === 'z') {
+  } else if (key === 'z') {
     answerPanelRef.value?.undo();
   } else if (e.key === '?') {
-    askModal.value = true;
-  } else if (['1', '2', '3', '4'].includes(e.key)) {
-    const idx = parseInt(e.key) - 1;
-    answerPanelRef.value?.selectChoice(idx);
-  } else if (e.key.toUpperCase() === 'O') {
-    answerPanelRef.value?.selectChoice('O');
-  } else if (e.key.toUpperCase() === 'X') {
-    answerPanelRef.value?.selectChoice('X');
+    e.preventDefault();
+    askInputRef.value?.focus();
+  } else if (/^[1-9]$/.test(e.key)) {
+    answerPanelRef.value?.selectChoice(parseInt(e.key));
+  } else if (key === 'o' || key === 'x') {
+    answerPanelRef.value?.selectChoice(key === 'o');
   }
 }
 </script>
