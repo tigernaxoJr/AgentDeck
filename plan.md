@@ -21,8 +21,8 @@
 - [x] 拆分 `tutor/features/answer.rs`：寫入移到 `store.rs`（`insert_attempt`／`insert_dialog_turn`／`record_outcome`），上下文組裝移到 `ai/context.rs`（與 `ask_tutor` 共用），base64 改用 `base64` crate；自評也加上 session 鎖、狀態檢查與弱點更新。
 
 ## Step 5 — 測試
-- [ ] 後端：以 `MockEngine` + SQLite 的 HTTP 端到端測試（開始 → 作答 → 提示 → 揭曉；確認揭曉前答案不外洩；admin 端點需要 key）。
-- [ ] 前端：導入 Vitest，為 `useTutorSession` 等邏輯加入單元測試。
+- [x] 後端：以 `MockEngine` + SQLite 的 HTTP 端到端測試（開始 → 作答 → 提示 → 揭曉；確認揭曉前答案不外洩；admin 端點需要 key）。過程中抓到並修正 `BookRef` 欄位名前後端不一致（`whereClause` vs `where`）。
+- [x] 前端：導入 Vitest，為 `useTutorSession` 等邏輯加入單元測試。
 
 ## Step 6 — CI
 - [ ] GitHub Actions：`cargo test`、`cargo clippy -D warnings`、`pnpm build`、`pnpm test`。
