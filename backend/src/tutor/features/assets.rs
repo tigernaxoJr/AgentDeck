@@ -37,11 +37,10 @@ async fn serve_asset(
         .canonicalize()
         .map_err(|_| ApiError::NotFound("Invalid path".into()))?;
 
-    let canonical_assets = base_assets.canonicalize().ok();
-    let canonical_answers = base_answers.canonicalize().ok();
-
-    let is_safe = (canonical_assets.is_some() && canonical_target.starts_with(canonical_assets.as_ref().unwrap()))
-        || (canonical_answers.is_some() && canonical_target.starts_with(canonical_answers.as_ref().unwrap()));
+    let is_safe = [&base_assets, &base_answers].into_iter().any(|base| {
+        base.canonicalize()
+            .is_ok_and(|base| canonical_target.starts_with(base))
+    });
 
     if !is_safe {
         return Err(ApiError::BadRequest("Forbidden path traversal".into()));

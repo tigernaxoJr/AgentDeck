@@ -25,6 +25,7 @@ use crate::tutor::store::{
     save_weakness,
 };
 use crate::tutor::TutorState;
+use crate::tutor::shared::enum_tag;
 
 #[derive(Debug, Deserialize)]
 pub struct AnswerReq {
@@ -177,7 +178,7 @@ async fn handle_answer(
                 book_ref: None,
                 recognized_text: None,
                 followup_question: None,
-                q_state: serde_json::to_string(&session.q_state).unwrap().trim_matches('"').into(),
+                q_state: enum_tag(&session.q_state),
                 reveal: Some(RevealInfo::for_question(&q)),
                 can_next: false,
                 self_grade_available: Some(true),
@@ -242,7 +243,7 @@ async fn handle_answer(
 
     // 5. Tutor reply (rule-graded wrong answers get the AI hint via /hint)
     let tutor_say: String;
-    let tutor_action = serde_json::to_string(&step.action).unwrap().trim_matches('"').to_string();
+    let tutor_action = enum_tag(&step.action);
     let mut book_ref = None;
     let mut followup_q = None;
     let mut hint_pending = false;
@@ -277,7 +278,7 @@ async fn handle_answer(
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
     // Insert attempt
-    let verdict_str = serde_json::to_string(&verdict).unwrap().trim_matches('"').to_string();
+    let verdict_str = enum_tag(&verdict);
     let input_text = choice_desc.or(payload.text);
     sqlx::query(
         r#"
@@ -368,7 +369,7 @@ async fn handle_answer(
         None
     };
 
-    let q_state_str = serde_json::to_string(&session.q_state).unwrap().trim_matches('"').to_string();
+    let q_state_str = enum_tag(&session.q_state);
 
     Ok(Json(TutorReply {
         verdict: verdict_str,
@@ -418,7 +419,7 @@ async fn handle_self_grade(
 
     // Record attempt
     let attempt_id = Uuid::new_v4().to_string();
-    let verdict_str = serde_json::to_string(&verdict).unwrap().trim_matches('"').to_string();
+    let verdict_str = enum_tag(&verdict);
     sqlx::query(
         r#"
         INSERT INTO attempts (
@@ -464,11 +465,11 @@ async fn handle_self_grade(
     Ok(Json(TutorReply {
         verdict: verdict_str,
         say,
-        action: serde_json::to_string(&step.action).unwrap().trim_matches('"').to_string(),
+        action: enum_tag(&step.action),
         book_ref: None,
         recognized_text: None,
         followup_question: None,
-        q_state: serde_json::to_string(&session.q_state).unwrap().trim_matches('"').to_string(),
+        q_state: enum_tag(&session.q_state),
         reveal,
         can_next: session.can_next(),
         self_grade_available: Some(false),
@@ -542,7 +543,7 @@ async fn handle_hint(
         }
     }
 
-    let action_str = serde_json::to_string(&action).unwrap().trim_matches('"').to_string();
+    let action_str = enum_tag(&action);
     let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
     sqlx::query(
         r#"
@@ -568,7 +569,7 @@ async fn handle_hint(
         book_ref,
         recognized_text: None,
         followup_question: followup_q,
-        q_state: serde_json::to_string(&session.q_state).unwrap().trim_matches('"').into(),
+        q_state: enum_tag(&session.q_state),
         reveal: None,
         can_next: session.can_next(),
         self_grade_available: None,

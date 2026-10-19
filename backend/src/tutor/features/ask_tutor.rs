@@ -14,6 +14,7 @@ use crate::tutor::shared::dto::TutorReply;
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{load_question, load_session, load_weaknesses};
 use crate::tutor::TutorState;
+use crate::tutor::shared::enum_tag;
 
 #[derive(Debug, Deserialize)]
 pub struct AskTutorReq {
@@ -159,7 +160,7 @@ async fn ask_tutor(
     .await
     .map_err(ApiError::from)?;
 
-    let q_state_str = serde_json::to_string(&session.q_state).unwrap().trim_matches('"').to_string();
+    let q_state_str = enum_tag(&session.q_state);
 
     Ok(Json(TutorReply {
         verdict: "none".into(),

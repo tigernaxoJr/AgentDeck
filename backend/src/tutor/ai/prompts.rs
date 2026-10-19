@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tutor::domain::question::Question;
 use crate::tutor::domain::session::QState;
+use crate::tutor::shared::enum_tag;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptDialogItem {
@@ -77,7 +78,7 @@ pub fn build_context_json(ctx: &PromptContext) -> String {
         },
         "question": {
             "id": q.id,
-            "qtype": serde_json::to_string(&q.qtype).unwrap().trim_matches('"'),
+            "qtype": enum_tag(&q.qtype),
             "stem": q.stem,
             "options": q.options,
             "answer": q.answer,
@@ -176,7 +177,7 @@ pub fn build_prompt(
         }
         ai_cli::AiPurpose::StudentMessage => {
             let msg = ctx.student_message.as_deref().unwrap_or("");
-            let q_state_str = serde_json::to_string(&ctx.q_state).unwrap().trim_matches('"').to_string();
+            let q_state_str = enum_tag(&ctx.q_state);
             format!(
                 r#"任務：學童對你說：「{}」。目前題目狀態：{}（若為 asking / hinting，不能洩漏答案）。
 回答學童，verdict=none，action=answer_question 或 show_book。"#,

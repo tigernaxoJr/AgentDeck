@@ -10,6 +10,7 @@ use crate::tutor::shared::dto::{BookRef, DialogTurnView, QuestionView, SessionVi
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{load_question, load_session, save_session};
 use crate::tutor::TutorState;
+use crate::tutor::shared::enum_tag;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,7 +69,7 @@ async fn get_session(
         })
         .collect();
 
-    let q_state_str = serde_json::to_string(&session.q_state).unwrap().trim_matches('"').to_string();
+    let q_state_str = enum_tag(&session.q_state);
 
     Ok(Json(SessionView {
         session_id: session.id,

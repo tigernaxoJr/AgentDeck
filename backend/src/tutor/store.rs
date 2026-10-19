@@ -4,6 +4,7 @@ use sqlx::{Row, SqliteConnection};
 use crate::tutor::domain::progress::{ConceptWeakness, Mastery};
 use crate::tutor::domain::question::{Answer, InputMode, QType, Question};
 use crate::tutor::domain::session::{QState, Session};
+use crate::tutor::shared::enum_tag;
 
 pub async fn load_question(
     conn: &mut SqliteConnection,
@@ -78,8 +79,8 @@ pub async fn save_question(
     conn: &mut SqliteConnection,
     q: &Question,
 ) -> Result<(), sqlx::Error> {
-    let qtype_str = serde_json::to_string(&q.qtype).unwrap().trim_matches('"').to_string();
-    let input_mode_str = serde_json::to_string(&q.input_mode).unwrap().trim_matches('"').to_string();
+    let qtype_str = enum_tag(&q.qtype);
+    let input_mode_str = enum_tag(&q.input_mode);
     let options_json = serde_json::to_string(&q.options).unwrap();
     let answer_json = serde_json::to_string(&q.answer).unwrap();
     let keywords_json = serde_json::to_string(&q.keywords).unwrap();
@@ -202,7 +203,7 @@ pub async fn save_session(
     s: &Session,
 ) -> Result<(), sqlx::Error> {
     let queue_json = serde_json::to_string(&s.queue).unwrap();
-    let q_state_str = serde_json::to_string(&s.q_state).unwrap().trim_matches('"').to_string();
+    let q_state_str = enum_tag(&s.q_state);
     let q_hinted_int = if s.q_hinted { 1 } else { 0 };
     let started_at = s.started_at.to_rfc3339();
     let ended_at = s.ended_at.map(|dt| dt.to_rfc3339());
