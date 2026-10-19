@@ -9,8 +9,8 @@
 - [x] `/api/tutor/admin/*` 套用 `require_api_key`（前端 `tutorFetch` 已會帶上 Console 設定的 API Key）。
 
 ## Step 2 — 安全：CORS 與 Docker 設定
-- [ ] CORS 由 `Any` 改為白名單（`CORS_ORIGINS`，預設 `http://localhost:5173`、`http://127.0.0.1:5173`）。
-- [ ] `docker-compose.yml` 改從 `.env` 讀取 API Key，新增 `.env.example`。
+- [x] CORS 由 `Any` 改為白名單（`CORS_ORIGINS`，預設 `http://localhost:5173`、`http://127.0.0.1:5173`）；前端預設改走同源（Vite proxy / nginx），WebSocket 由 `location.origin` 推導。
+- [x] `docker-compose.yml` 改從 `.env` 讀取 API Key，新增 `.env.example`。
 
 ## Step 3 — 啟動流程
 - [ ] `tutor::init` 從 `create_router` 的 `block_in_place` 移到 `main` 的 async 流程，初始化失敗即終止。

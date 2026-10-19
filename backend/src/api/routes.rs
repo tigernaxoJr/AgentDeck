@@ -10,7 +10,8 @@ use axum::{
     Json, Router,
 };
 use tokio::process::Command;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::HeaderValue;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 
 use crate::api::auth::require_api_key;
@@ -40,7 +41,7 @@ impl AppState {
 
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(cors_origins())
         .allow_methods(Any)
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
@@ -83,6 +84,20 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/tutor", tutor_router)
         .nest("/api", protected_api.with_state(state))
         .layer(cors)
+}
+
+/// 跨域白名單：前端預設同源存取，只有直連後端的開發情境才需要。
+/// `CORS_ORIGINS` 以逗號分隔，預設為 Vite dev server 的兩個位址。
+fn cors_origins() -> AllowOrigin {
+    let raw = std::env::var("CORS_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".to_string());
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+    AllowOrigin::list(origins)
 }
 
 /// POST /api/tasks - 建立新任務

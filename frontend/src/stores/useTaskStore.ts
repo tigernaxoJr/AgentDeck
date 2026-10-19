@@ -14,7 +14,9 @@ import type {
   WorkspaceInfo,
 } from "@/types/protocol";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
+// 預設走同源（dev 由 Vite proxy、Docker 由 nginx 轉發），不需跨域；
+// 需要直連後端時才設定 VITE_API_BASE（並把前端來源加入後端 CORS_ORIGINS）。
+const API_BASE: string = import.meta.env.VITE_API_BASE || "";
 const MAX_LOG_BUFFER = 5000; // 每個任務在記憶體中最多保留 5000 行，防止瀏覽器 OOM
 
 export const useTaskStore = defineStore("taskStore", () => {
@@ -79,7 +81,8 @@ export const useTaskStore = defineStore("taskStore", () => {
   // 3. WebSocket 連線與事件分發
   // ==========================================
   const wsUrl = computed(() => {
-    const baseWs = API_BASE.replace(/^http/, "ws") + "/api/ws";
+    const origin = API_BASE || window.location.origin;
+    const baseWs = origin.replace(/^http/, "ws") + "/api/ws";
     const tokenParam = encodeURIComponent(apiKey.value.trim());
     return tokenParam ? `${baseWs}?token=${tokenParam}` : baseWs;
   });

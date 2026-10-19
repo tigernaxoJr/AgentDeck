@@ -13,12 +13,16 @@ services:
       - .:/workspace
       # SQLite 資料庫持久化目錄
       - sqlite_data:/data
+    # 機密設定（ANTIGRAVITY_API_KEY 等）放在 .env，範本見 .env.example
+    env_file:
+      - .env
     environment:
       - ANTIGRAVITY_WORKSPACE=/workspace
       - DATABASE_URL=sqlite:///data/antigravity_tasks.db
-      - ANTIGRAVITY_API_KEY=
+      # 未設定時直接中止，避免以無驗證模式對外開放 8080
+      - ANTIGRAVITY_API_KEY=${ANTIGRAVITY_API_KEY:?請在 .env 設定 ANTIGRAVITY_API_KEY}
       # 如果主機環境有自訂 CLI binary 或路徑
-      - ANTIGRAVITY_CLI_BIN=agy
+      - ANTIGRAVITY_CLI_BIN=${ANTIGRAVITY_CLI_BIN:-agy}
 
 volumes:
   sqlite_data:
