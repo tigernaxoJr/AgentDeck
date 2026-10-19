@@ -14,6 +14,9 @@ pub mod store;
 pub mod ai;
 pub mod features;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub struct TutorState {
     pub pool: SqlitePool,
