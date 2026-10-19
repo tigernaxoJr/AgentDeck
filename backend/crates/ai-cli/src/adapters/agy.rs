@@ -46,6 +46,7 @@ impl CliAdapter for AgyAdapter {
             args.push(m.clone());
         }
 
+        args.extend(inv.extra_args.iter().cloned());
         args.push("-p".to_string());
         args.push(inv.prompt.clone());
 
@@ -125,6 +126,7 @@ mod tests {
             expect_output_file: None,
             model: Some("custom-model".into()),
             timeout: Duration::from_secs(30),
+            extra_args: vec!["--sandbox".into()],
         };
 
         let spec = adapter.build_command("agy.exe", &inv, Path::new("."));
@@ -137,6 +139,7 @@ mod tests {
                 "stream-json",
                 "--model",
                 "custom-model",
+                "--sandbox",
                 "-p",
                 "hello prompt"
             ]

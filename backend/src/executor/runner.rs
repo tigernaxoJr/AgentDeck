@@ -11,6 +11,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{interval, timeout, MissedTickBehavior};
 use uuid::Uuid;
 
+use ai_cli::adapters::AgyAdapter;
+use ai_cli::{AiInvocation, AiPurpose, CliAdapter};
+
 use crate::models::protocol::{
     ArtifactData, ArtifactType, CreateTaskRequest, LogEntry, ServerEvent, StreamChannel, TaskState,
     TokenUsage,
@@ -41,24 +44,32 @@ impl TaskRunner {
         // 2. 準備結構化輸出目錄與附加系統 Prompt
         let final_prompt = self.prepare_prompt_and_output_dir(&work_dir).await;
 
-        // 3. 建構安全的非互動式 Command
-        // 優先尋找使用者自訂的 ANTIGRAVITY_CLI_BIN，未設定則嘗試 "agy"，再次為 "antigravity"
-        let bin_name = ai_cli::adapters::agy::resolve_agy_bin();
+        // 3. 由 ai-cli 的 adapter 組出 CLI 指令（旗標與 Tutor 共用同一份定義）
+        let adapter = AgyAdapter;
+        let bin_name = adapter.default_program();
+        let inv = AiInvocation {
+            call_id: self.task_id.to_string(),
+            purpose: AiPurpose::Console,
+            prompt: final_prompt,
+            files: Vec::new(),
+            images: Vec::new(),
+            expect_output_file: None,
+            model: self
+                .req
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(str::to_string),
+            timeout: Duration::from_secs(self.req.timeout_secs),
+            extra_args: self.req.extra_flags.clone(),
+        };
+        let spec = adapter.build_command(&bin_name, &inv, &work_dir);
 
-        let mut cmd = Command::new(&bin_name);
+        let mut cmd = Command::new(&spec.program);
         cmd.current_dir(&work_dir)
-            .arg("--dangerously-skip-permissions")
-            .arg("--output-format")
-            .arg("stream-json");
-
-        if let Some(ref m) = self.req.model
-            && !m.trim().is_empty() {
-                cmd.arg("--model").arg(m.trim());
-            }
-
-        cmd.args(&self.req.extra_flags)
-            .arg("-p")
-            .arg(&final_prompt)
+            .args(&spec.args)
+            .envs(spec.env)
             .stdin(Stdio::null()) // 切斷標準輸入，防止 Zombie Process
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

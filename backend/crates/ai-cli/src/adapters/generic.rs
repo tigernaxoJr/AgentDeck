@@ -84,8 +84,13 @@ impl CliAdapter for GenericAdapter {
         let prompt_str = &inv.prompt;
         let model_str = inv.model.as_deref().unwrap_or("");
 
+        // `{extra_args}` 決定額外旗標的位置；樣板沒寫就附加在最後
+        let mut extra_placed = false;
         for arg in &self.config.args {
-            if arg == "{model_args}" {
+            if arg == "{extra_args}" {
+                final_args.extend(inv.extra_args.iter().cloned());
+                extra_placed = true;
+            } else if arg == "{model_args}" {
                 if !model_str.is_empty() {
                     for m_arg in &self.config.model_args {
                         final_args.push(m_arg.replace("{model}", model_str));
@@ -103,6 +108,10 @@ impl CliAdapter for GenericAdapter {
                     .replace("{model}", model_str);
                 final_args.push(replaced);
             }
+        }
+
+        if !extra_placed {
+            final_args.extend(inv.extra_args.iter().cloned());
         }
 
         let stdin = if self.config.prompt_via_stdin {

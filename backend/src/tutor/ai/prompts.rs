@@ -187,6 +187,8 @@ pub fn build_prompt(
         ai_cli::AiPurpose::EnrichPage => {
             "任務：分析掃描頁中的題目位置與概念標籤。".to_string()
         }
+        // Console 任務直接送使用者的 prompt，不會經過家教的 prompt 組裝
+        ai_cli::AiPurpose::Console => String::new(),
     };
 
     format!("{}\n\n{}", sys_block, task_block)

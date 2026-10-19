@@ -33,4 +33,5 @@
 - [x] `doc/design*.md` 依主題重新命名並加上 `doc/README.md` 索引（空白的 `design5.md` 已刪除）。
 
 ## Step 8 — Console 改用 ai-cli（T-22）
-- [ ] `executor/runner.rs` 透過 `ai_cli` 的 adapter 組 CLI 指令，移除重複的旗標組裝。
+- [x] `executor/runner.rs` 透過 `ai_cli` 的 `AgyAdapter::build_command` 組 CLI 指令，移除重複的旗標組裝；`AiInvocation` 新增 `extra_args`（Console 的 extraFlags），各 adapter 放在 prompt 之前（generic 可用 `{extra_args}` 指定位置）。
+- 串流解析仍保留 Console 自己的版本：agy 會把 `usage` 與 `text_delta` 放在同一行，而 Console 的 `TokenUsage` 含 thinking/cache tokens，改用 `parse_line`（一行只回一個項目）會遺失用量資訊。要統一需先讓 `parse_line` 能回傳多個項目，另案處理。

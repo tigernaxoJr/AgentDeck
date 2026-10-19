@@ -119,6 +119,7 @@ pub async fn call_turn(
             ai_cli::AiPurpose::TutorWrong => "tutor_wrong",
             ai_cli::AiPurpose::StudentMessage => "student_message",
             ai_cli::AiPurpose::EnrichPage => "enrich_page",
+            ai_cli::AiPurpose::Console => "console",
         };
 
         let inp_tok = rec.usage.as_ref().and_then(|u| u.input_tokens);

@@ -26,6 +26,8 @@ pub enum AiPurpose {
     TutorWrong,
     StudentMessage,
     EnrichPage,
+    /// Console 任務：使用者直接派發給 CLI 的 prompt
+    Console,
 }
 
 pub struct RunFile {
@@ -42,6 +44,8 @@ pub struct AiInvocation {
     pub expect_output_file: Option<String>,
     pub model: Option<String>,
     pub timeout: Duration,
+    /// 呼叫端額外指定的 CLI 旗標（例如 Console 的 extraFlags），由 adapter 放在 prompt 之前
+    pub extra_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

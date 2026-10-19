@@ -77,6 +77,7 @@ pub async fn call_json<T: DeserializeOwned>(
                 },
                 model: engine.model(),
                 timeout: spec.timeout,
+                extra_args: Vec::new(),
             };
 
             let res = engine.run(inv).await;

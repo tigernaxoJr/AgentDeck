@@ -38,6 +38,7 @@ impl CliAdapter for ClaudeCodeAdapter {
             args.push("--model".to_string());
             args.push(m.clone());
         }
+        args.extend(inv.extra_args.iter().cloned());
 
         CommandSpec {
             program: program.to_string(),
@@ -108,6 +109,7 @@ impl CliAdapter for GeminiCliAdapter {
             args.push("-m".to_string());
             args.push(m.clone());
         }
+        args.extend(inv.extra_args.iter().cloned());
 
         CommandSpec {
             program: program.to_string(),
@@ -171,6 +173,7 @@ impl CliAdapter for CodexAdapter {
             args.push(img.clone());
         }
 
+        args.extend(inv.extra_args.iter().cloned());
         args.push(inv.prompt.clone());
 
         CommandSpec {
