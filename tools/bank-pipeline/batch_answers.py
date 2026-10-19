@@ -7,8 +7,8 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-SCANS_BASE = r"C:\workspace\jamie-exam\data\scans"
-DATA_DIR = r"C:\workspace\cli_as_driver\backend\tutor_data"
+from config import DATA_DIR, SCANS_DIR
+SCANS_BASE = SCANS_DIR
 ANSWERS_DIR = os.path.join(DATA_DIR, "parsed_answers")
 RUNS_BASE = os.path.join(ANSWERS_DIR, "runs")
 OUTPUT_DIR = os.path.join(ANSWERS_DIR, "pages")

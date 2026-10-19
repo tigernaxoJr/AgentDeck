@@ -2,8 +2,9 @@ import os
 import json
 import re
 
-EXTRACTED_FILE = r"C:\workspace\cli_as_driver\scratch\test_extract\out\extracted.json"
-TARGET_QUESTIONS = r"C:\workspace\cli_as_driver\backend\tutor_data\questions_extra.json"
+from config import DATA_DIR, SCRATCH_DIR
+EXTRACTED_FILE = os.path.join(SCRATCH_DIR, "test_extract", "out", "extracted.json")
+TARGET_QUESTIONS = os.path.join(DATA_DIR, "questions_extra.json")
 
 def convert_extracted():
     if not os.path.exists(EXTRACTED_FILE):

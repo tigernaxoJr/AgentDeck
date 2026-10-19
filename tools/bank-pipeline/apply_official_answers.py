@@ -2,7 +2,7 @@ import os
 import json
 import re
 
-DATA_DIR = r"C:\workspace\cli_as_driver\backend\tutor_data"
+from config import DATA_DIR
 ANSWERS_DIR = os.path.join(DATA_DIR, "parsed_answers", "pages")
 EXTRACTED_DIR = os.path.join(DATA_DIR, "extracted_pages")
 ALL_QUESTIONS_FILE = os.path.join(DATA_DIR, "questions_scanned_all.json")

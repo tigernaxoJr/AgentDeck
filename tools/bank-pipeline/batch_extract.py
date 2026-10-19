@@ -3,8 +3,8 @@ import json
 import subprocess
 import glob
 
-SCANS_DIR = r"C:\workspace\jamie-exam\data\scans"
-OUTPUT_DIR = r"C:\workspace\cli_as_driver\backend\tutor_data\extracted_bank"
+from config import DATA_DIR, SCANS_DIR
+OUTPUT_DIR = os.path.join(DATA_DIR, "extracted_bank")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 PROMPT_TEMPLATE = """請仔細閱讀當前目錄的 ./page.jpg 圖片，萃取該頁面上所有的題目（是非題、選擇題、填空題、簡答題）。

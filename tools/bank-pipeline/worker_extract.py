@@ -6,8 +6,8 @@ import shutil
 import sys
 import time
 
-SCANS_BASE = r"C:\workspace\jamie-exam\data\scans"
-DATA_DIR = r"C:\workspace\cli_as_driver\backend\tutor_data"
+from config import DATA_DIR, SCANS_DIR
+SCANS_BASE = SCANS_DIR
 RUNS_BASE = os.path.join(DATA_DIR, "runs_extract")
 OUTPUT_DIR = os.path.join(DATA_DIR, "extracted_pages")
 

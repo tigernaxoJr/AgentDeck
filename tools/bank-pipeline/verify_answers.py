@@ -2,8 +2,7 @@ import os
 import json
 import re
 
-DATA_DIR = r"C:\workspace\cli_as_driver\backend\tutor_data"
-SCANS_DIR = r"C:\workspace\jamie-exam\data\scans"
+from config import DATA_DIR, SCANS_DIR
 PAGES_DIR = os.path.join(DATA_DIR, "extracted_pages")
 
 def verify_and_clean_questions():
