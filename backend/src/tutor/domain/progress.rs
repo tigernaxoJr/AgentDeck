@@ -81,7 +81,7 @@ pub fn next_mastery(
         }
         Outcome::AfterHint => {
             // max(box-1, 0) 但至少 1 -> (base.box_level - 1).clamp(1, 5) if base >= 2 else 1
-            let next_box = (base.box_level - 1).max(1).min(5);
+            let next_box = (base.box_level - 1).clamp(1, 5);
             let due = now + Duration::days(1);
             Mastery {
                 student_id,

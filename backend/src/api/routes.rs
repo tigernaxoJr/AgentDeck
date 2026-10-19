@@ -319,7 +319,7 @@ async fn list_models_handler() -> Result<Json<Vec<ModelInfo>>, (StatusCode, Stri
             continue;
         }
         // 解析格式例如 "gemini-3.8-flash-high\tGemini 3.8 Flash (High)" 或空白分隔
-        let parts: Vec<&str> = trimmed.splitn(2, |c| c == '\t' || c == ' ').collect();
+        let parts: Vec<&str> = trimmed.splitn(2, ['\t', ' ']).collect();
         if !parts.is_empty() {
             let id = parts[0].trim().to_string();
             let name = if parts.len() > 1 && !parts[1].trim().is_empty() {
@@ -371,12 +371,12 @@ async fn list_workspaces_handler() -> Result<Json<Vec<WorkspaceInfo>>, (StatusCo
         }
 
         // 3. 掃描同層或上一層 workspace 目錄（如果有）
-        if let Some(parent) = current_dir.parent() {
-            if let Ok(entries) = std::fs::read_dir(parent) {
+        if let Some(parent) = current_dir.parent()
+            && let Ok(entries) = std::fs::read_dir(parent) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.is_dir() && path != current_dir {
-                        if let Some(file_name) = path.file_name() {
+                    if path.is_dir() && path != current_dir
+                        && let Some(file_name) = path.file_name() {
                             let name_str = file_name.to_string_lossy().to_string();
                             if !name_str.starts_with('.') {
                                 workspaces.push(WorkspaceInfo {
@@ -385,10 +385,8 @@ async fn list_workspaces_handler() -> Result<Json<Vec<WorkspaceInfo>>, (StatusCo
                                 });
                             }
                         }
-                    }
                 }
             }
-        }
     }
 
     Ok(Json(workspaces))

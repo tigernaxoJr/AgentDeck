@@ -25,8 +25,7 @@ pub fn latest_version() -> i64 {
 
 pub async fn open(data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
     tokio::fs::create_dir_all(data_dir).await.map_err(|e| {
-        sqlx::Error::Configuration(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        sqlx::Error::Configuration(Box::new(std::io::Error::other(
             format!("Failed to create data dir: {e}"),
         )))
     })?;

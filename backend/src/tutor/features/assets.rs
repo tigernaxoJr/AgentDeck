@@ -50,9 +50,9 @@ async fn serve_asset(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to read asset: {e}")))?;
 
-    let mime = if canonical_target.extension().map_or(false, |ext| ext == "png") {
+    let mime = if canonical_target.extension().is_some_and(|ext| ext == "png") {
         "image/png"
-    } else if canonical_target.extension().map_or(false, |ext| ext == "jpg" || ext == "jpeg") {
+    } else if canonical_target.extension().is_some_and(|ext| ext == "jpg" || ext == "jpeg") {
         "image/jpeg"
     } else {
         "application/octet-stream"

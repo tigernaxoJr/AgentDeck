@@ -53,25 +53,21 @@ pub async fn import_all(
     let questions_file = root.join("web").join("public").join("data").join("questions.json");
     let mut raw_list: Vec<RawImportQuestion> = Vec::new();
 
-    if questions_file.exists() {
-        if let Ok(content) = tokio::fs::read_to_string(&questions_file).await {
-            if let Ok(list) = serde_json::from_str::<Vec<RawImportQuestion>>(&content) {
+    if questions_file.exists()
+        && let Ok(content) = tokio::fs::read_to_string(&questions_file).await
+            && let Ok(list) = serde_json::from_str::<Vec<RawImportQuestion>>(&content) {
                 raw_list.extend(list);
             }
-        }
-    }
 
     // Also scan data_dir for questions_*.json
     if let Ok(mut entries) = tokio::fs::read_dir(data_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let p = entry.path();
-            if p.is_file() && p.file_name().and_then(|f| f.to_str()).map_or(false, |s| s.starts_with("questions") && s.ends_with(".json")) {
-                if let Ok(content) = tokio::fs::read_to_string(&p).await {
-                    if let Ok(list) = serde_json::from_str::<Vec<RawImportQuestion>>(&content) {
+            if p.is_file() && p.file_name().and_then(|f| f.to_str()).is_some_and(|s| s.starts_with("questions") && s.ends_with(".json"))
+                && let Ok(content) = tokio::fs::read_to_string(&p).await
+                    && let Ok(list) = serde_json::from_str::<Vec<RawImportQuestion>>(&content) {
                         raw_list.extend(list);
                     }
-                }
-            }
         }
     }
 
@@ -124,12 +120,11 @@ pub async fn import_all(
                 if let Ok(mut entries) = tokio::fs::read_dir(&src_dir).await {
                     while let Ok(Some(entry)) = entries.next_entry().await {
                         let path = entry.path();
-                        if path.is_file() {
-                            if let Some(file_name) = path.file_name() {
+                        if path.is_file()
+                            && let Some(file_name) = path.file_name() {
                                 let dest = target_dir.join(file_name);
                                 let _ = tokio::fs::copy(&path, &dest).await;
                             }
-                        }
                     }
                 }
             }
@@ -183,7 +178,7 @@ pub async fn import_all(
         let q = normalize_import(raw, idx as i64 + 1, prev_book_page, 0, &now)?;
         prev_book_page = q.book_page;
 
-        save_question(&mut *conn, &q).await.map_err(|e| e.to_string())?;
+        save_question(&mut conn, &q).await.map_err(|e| e.to_string())?;
         stats.questions += 1;
     }
 
@@ -205,8 +200,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_import_all_on_real_data() {
+        // 題庫素材有版權、不在 repo 內（CI 也沒有），找不到就跳過
+        let root_str = std::env::var("TUTOR_IMPORT_ROOT")
+            .unwrap_or_else(|_| "C:/workspace/jamie-exam".to_string());
+        let root = Path::new(&root_str);
+        if !root.exists() {
+            eprintln!("skip: import root {root_str} not found");
+            return;
+        }
         let pool = open_url("sqlite::memory:").await.expect("open memory db");
-        let root = Path::new("C:/workspace/jamie-exam");
         let data_dir = Path::new("target/test_tutor_data");
 
         let stats = import_all(&pool, root, data_dir).await.expect("import all");
@@ -214,14 +216,14 @@ mod tests {
 
         let mut conn = pool.acquire().await.unwrap();
         // check soc_01_mc_1
-        let q_mc = load_question(&mut *conn, "soc_01_mc_1")
+        let q_mc = load_question(&mut conn, "soc_01_mc_1")
             .await
             .unwrap()
             .expect("soc_01_mc_1 exists");
         assert_eq!(q_mc.answer, Answer::Choice(1));
 
         // check soc_01_map_1
-        let q_map = load_question(&mut *conn, "soc_01_map_1")
+        let q_map = load_question(&mut conn, "soc_01_map_1")
             .await
             .unwrap()
             .expect("soc_01_map_1 exists");

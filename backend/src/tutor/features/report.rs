@@ -46,6 +46,9 @@ pub struct StudentReportView {
     pub recent_wrong: Vec<WrongQuestionReportItem>,
 }
 
+/// verdict, input_image_path, input_text, recognized_text, graded_by, created_at
+type AttemptRow = (String, Option<String>, Option<String>, Option<String>, String, String);
+
 pub fn routes() -> Router<TutorState> {
     Router::new().route("/students/{id}/report", get(get_student_report))
 }
@@ -103,8 +106,8 @@ async fn get_student_report(
 
     let mut recent_wrong = Vec::new();
     for (qid,) in recent_q_rows {
-        if let Some(q) = load_question(&mut *conn, &qid).await.map_err(ApiError::from)? {
-            let att_rows: Vec<(String, Option<String>, Option<String>, Option<String>, String, String)> = sqlx::query_as(
+        if let Some(q) = load_question(&mut conn, &qid).await.map_err(ApiError::from)? {
+            let att_rows: Vec<AttemptRow> = sqlx::query_as(
                 r#"
                 SELECT verdict, input_image_path, input_text, recognized_text, graded_by, created_at
                 FROM attempts

@@ -417,11 +417,11 @@ async fn handle_hint(
     };
 
     let mut conn = state.pool.acquire().await?;
-    let session = load_session(&mut *conn, &id)
+    let session = load_session(&mut conn, &id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
 
-    let q = load_question(&mut *conn, &payload.question_id)
+    let q = load_question(&mut conn, &payload.question_id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
 

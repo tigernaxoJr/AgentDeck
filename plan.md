@@ -25,7 +25,7 @@
 - [x] 前端：導入 Vitest，為 `useTutorSession` 等邏輯加入單元測試。
 
 ## Step 6 — CI
-- [ ] GitHub Actions：`cargo test`、`cargo clippy -D warnings`、`pnpm build`、`pnpm test`。
+- [x] GitHub Actions：`cargo test`、`cargo clippy -D warnings`、`pnpm build`、`pnpm test`（先以 `clippy --fix` 清掉既有警告；Docker 映像升到 rust 1.90，因 let-chains 需 1.88+；需真實題庫的測試在找不到素材時跳過）。
 
 ## Step 7 — 文件與目錄整理
 - [ ] 更新 README（實際目錄、Tutor 系統、啟動方式、環境變數）。

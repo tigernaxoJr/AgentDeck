@@ -32,14 +32,14 @@ async fn get_session(
     Path(id): Path<String>,
 ) -> Result<Json<SessionView>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let session = load_session(&mut *conn, &id)
+    let session = load_session(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
 
     let curr_qid = session.current_question_id();
     let q_view = if let Some(qid) = curr_qid {
-        load_question(&mut *conn, qid)
+        load_question(&mut conn, qid)
             .await
             .map_err(ApiError::from)?
             .as_ref()
@@ -89,7 +89,7 @@ async fn next_question(
     Path(id): Path<String>,
 ) -> Result<Json<SessionView>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let mut session = load_session(&mut *conn, &id)
+    let mut session = load_session(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
@@ -102,7 +102,7 @@ async fn next_question(
         return Err(ApiError::Conflict("Already reached end of queue".into()));
     }
 
-    save_session(&mut *conn, &session)
+    save_session(&mut conn, &session)
         .await
         .map_err(ApiError::from)?;
 
@@ -115,13 +115,13 @@ async fn end_session(
     Path(id): Path<String>,
 ) -> Result<Json<EndSessionReport>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let mut session = load_session(&mut *conn, &id)
+    let mut session = load_session(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
 
     session.finish(Utc::now());
-    save_session(&mut *conn, &session)
+    save_session(&mut conn, &session)
         .await
         .map_err(ApiError::from)?;
 

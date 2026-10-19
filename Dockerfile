@@ -18,7 +18,7 @@ RUN pnpm run build
 # ==========================================
 # 2. 後端構建階段 (Rust 2024 + musl/alpine)
 # ==========================================
-FROM rust:1.85-alpine AS backend-builder
+FROM rust:1.90-alpine AS backend-builder
 WORKDIR /app/backend
 
 # 安裝 SQLite 與 musl 建置所需依賴

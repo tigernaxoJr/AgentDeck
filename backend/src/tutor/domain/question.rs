@@ -96,8 +96,6 @@ pub fn grade_choice(q: &Question, input: &ChoiceInput<'_>) -> Verdict {
             let is_false = s.eq_ignore_ascii_case("X") || s == "×" || s == "x";
             if (is_true && *expected) || (is_false && !*expected) {
                 Verdict::Correct
-            } else if is_true || is_false {
-                Verdict::Incorrect
             } else {
                 Verdict::Incorrect
             }
@@ -112,16 +110,14 @@ pub fn grade_choice(q: &Question, input: &ChoiceInput<'_>) -> Verdict {
         (Answer::Choice(expected_idx), ChoiceInput::Text(s)) => {
             let s = s.trim();
             // 文字輸入的數字為 1-based（學童看到的題號）
-            if let Ok(num) = s.parse::<usize>() {
-                if num >= 1 && *expected_idx == num - 1 {
+            if let Ok(num) = s.parse::<usize>()
+                && num >= 1 && *expected_idx == num - 1 {
                     return Verdict::Correct;
                 }
-            }
-            if let Some(opt_text) = q.options.get(*expected_idx) {
-                if opt_text.trim() == s {
+            if let Some(opt_text) = q.options.get(*expected_idx)
+                && opt_text.trim() == s {
                     return Verdict::Correct;
                 }
-            }
             Verdict::Incorrect
         }
         _ => Verdict::Incorrect,
@@ -297,11 +293,10 @@ pub fn normalize_import(
         // e.g. crops/social_003_school_map.png
         if let Some(idx) = img.find('_') {
             let rest = &img[idx + 1..];
-            if let Some(end) = rest.find('_') {
-                if let Ok(p) = rest[..end].parse::<i64>() {
+            if let Some(end) = rest.find('_')
+                && let Ok(p) = rest[..end].parse::<i64>() {
                     book_page = Some(p + page_offset);
                 }
-            }
         }
     }
     if book_page.is_none() {
@@ -309,11 +304,10 @@ pub fn normalize_import(
     }
 
     let mut concept_tags = Vec::new();
-    if let Some(sec) = &raw.section {
-        if !sec.is_empty() {
+    if let Some(sec) = &raw.section
+        && !sec.is_empty() {
             concept_tags.push(sec.clone());
         }
-    }
     let keywords = raw.keywords.unwrap_or_default();
     for kw in &keywords {
         if !concept_tags.contains(kw) {

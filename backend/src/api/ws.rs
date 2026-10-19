@@ -40,14 +40,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             broadcast_res = event_rx.recv() => {
                 match broadcast_res {
                     Ok(event) => {
-                        if should_forward_event(&event, &subscribed_tasks) {
-                            if let Ok(json_text) = serde_json::to_string(&event) {
-                                if socket.send(Message::Text(json_text.into())).await.is_err() {
+                        if should_forward_event(&event, &subscribed_tasks)
+                            && let Ok(json_text) = serde_json::to_string(&event)
+                                && socket.send(Message::Text(json_text.into())).await.is_err() {
                                     // 客戶端已斷線
                                     break;
                                 }
-                            }
-                        }
                     }
                     Err(RecvError::Lagged(skipped)) => {
                         // 當前端網路過慢導致 Ring Buffer 覆寫時，通知前端有多少封包被略過

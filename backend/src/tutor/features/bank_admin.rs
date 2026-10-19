@@ -29,7 +29,7 @@ async fn get_admin_question(
     Path(id): Path<String>,
 ) -> Result<Json<Question>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let q = load_question(&mut *conn, &id)
+    let q = load_question(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
@@ -43,7 +43,7 @@ async fn update_admin_question(
     Json(payload): Json<UpdateQuestionReq>,
 ) -> Result<Json<Question>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let mut q = load_question(&mut *conn, &id)
+    let mut q = load_question(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
@@ -62,7 +62,7 @@ async fn update_admin_question(
     }
     q.updated_at = Utc::now().to_rfc3339();
 
-    save_question(&mut *conn, &q).await.map_err(ApiError::from)?;
+    save_question(&mut conn, &q).await.map_err(ApiError::from)?;
 
     Ok(Json(q))
 }

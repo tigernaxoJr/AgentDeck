@@ -77,6 +77,7 @@ impl std::fmt::Display for TurnError {
 
 impl std::error::Error for TurnError {}
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_turn(
     engines: &[Arc<dyn AiEngine>],
     purpose: ai_cli::AiPurpose,

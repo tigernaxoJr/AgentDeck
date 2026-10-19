@@ -51,11 +51,10 @@ impl TaskRunner {
             .arg("--output-format")
             .arg("stream-json");
 
-        if let Some(ref m) = self.req.model {
-            if !m.trim().is_empty() {
+        if let Some(ref m) = self.req.model
+            && !m.trim().is_empty() {
                 cmd.arg("--model").arg(m.trim());
             }
-        }
 
         cmd.args(&self.req.extra_flags)
             .arg("-p")
@@ -107,13 +106,11 @@ impl TaskRunner {
                     let usage_val = val.pointer("/result/usage")
                         .or_else(|| val.pointer("/step_update/usage"))
                         .or_else(|| val.get("usage"));
-                    if let Some(u) = usage_val {
-                        if let Ok(parsed) = serde_json::from_value::<TokenUsage>(u.clone()) {
-                            if let Ok(mut lock) = captured_usage_clone.lock() {
+                    if let Some(u) = usage_val
+                        && let Ok(parsed) = serde_json::from_value::<TokenUsage>(u.clone())
+                            && let Ok(mut lock) = captured_usage_clone.lock() {
                                 *lock = Some(parsed);
                             }
-                        }
-                    }
 
                     // 2. 轉換 text_delta 為乾淨的終端文字輸出
                     if let Some(delta) = val.pointer("/step_update/text_delta").and_then(|v| v.as_str()) {

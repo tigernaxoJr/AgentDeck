@@ -42,20 +42,17 @@ pub async fn init(data_dir: PathBuf, api_key: Arc<String>) -> Result<(TutorState
 
     // Clean runs older than 7 days
     let runs_dir = data_dir.join("runs");
-    if runs_dir.exists() {
-        if let Ok(mut entries) = tokio::fs::read_dir(&runs_dir).await {
+    if runs_dir.exists()
+        && let Ok(mut entries) = tokio::fs::read_dir(&runs_dir).await {
             let cutoff = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
             while let Ok(Some(entry)) = entries.next_entry().await {
-                if let Ok(meta) = entry.metadata().await {
-                    if let Ok(mod_time) = meta.modified() {
-                        if mod_time < cutoff {
+                if let Ok(meta) = entry.metadata().await
+                    && let Ok(mod_time) = meta.modified()
+                        && mod_time < cutoff {
                             let _ = tokio::fs::remove_dir_all(entry.path()).await;
                         }
-                    }
-                }
             }
         }
-    }
 
     let ai = Arc::new(Backends::init(pool.clone(), data_dir.clone()).await);
 

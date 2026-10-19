@@ -238,25 +238,28 @@ pub struct AiCallItemView {
     pub created_at: String,
 }
 
+/// ai_calls 的一列，欄位順序同下方 SELECT
+type AiCallRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    String,
+);
+
 async fn get_recent_ai_calls(
     State(state): State<TutorState>,
 ) -> Result<Json<Vec<AiCallItemView>>, ApiError> {
-    let rows: Vec<(
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        i64,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<i64>,
-        String,
-    )> = sqlx::query_as(
+    let rows: Vec<AiCallRow> = sqlx::query_as(
         r#"
         SELECT id, backend, model, purpose, session_id, question_id,
                duration_ms, ok, error, raw_output, prompt, input_tokens, output_tokens, created_at

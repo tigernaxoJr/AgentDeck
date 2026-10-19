@@ -135,7 +135,7 @@ impl TaskScheduler {
             queued.fetch_sub(1, Ordering::SeqCst);
             running.fetch_add(1, Ordering::SeqCst);
 
-            let _ = self_send_metrics(&event_tx, &running, &queued, sem.available_permits());
+            self_send_metrics(&event_tx, &running, &queued, sem.available_permits());
             let _ = event_tx.send(ServerEvent::TaskStateChanged {
                 task_id,
                 old_state: Some(TaskState::Queued),

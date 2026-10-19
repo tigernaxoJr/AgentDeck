@@ -441,6 +441,7 @@ pub async fn insert_attempt(
 }
 
 /// 寫入一則對話（`role` 為 `tutor` 或 `student`）
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_dialog_turn(
     conn: &mut SqliteConnection,
     session_id: &str,
@@ -555,8 +556,8 @@ mod tests {
             active: true,
             updated_at: "2026-10-15T00:00:00Z".into(),
         };
-        save_question(&mut *conn, &q).await.unwrap();
-        let loaded_q = load_question(&mut *conn, "q1").await.unwrap().unwrap();
+        save_question(&mut conn, &q).await.unwrap();
+        let loaded_q = load_question(&mut conn, "q1").await.unwrap().unwrap();
         assert_eq!(q, loaded_q);
 
         // 2. Session roundtrip
@@ -575,8 +576,8 @@ mod tests {
             started_at: now,
             ended_at: None,
         };
-        save_session(&mut *conn, &s).await.unwrap();
-        let loaded_s = load_session(&mut *conn, "sess1").await.unwrap().unwrap();
+        save_session(&mut conn, &s).await.unwrap();
+        let loaded_s = load_session(&mut conn, "sess1").await.unwrap().unwrap();
         assert_eq!(s.id, loaded_s.id);
         assert_eq!(s.student_id, loaded_s.student_id);
         assert_eq!(s.queue, loaded_s.queue);
@@ -595,8 +596,8 @@ mod tests {
             last_verdict: Some("correct".into()),
             last_seen_at: Some(now),
         };
-        save_progress(&mut *conn, &m).await.unwrap();
-        let loaded_m = load_progress(&mut *conn, 1, "q1").await.unwrap().unwrap();
+        save_progress(&mut conn, &m).await.unwrap();
+        let loaded_m = load_progress(&mut conn, 1, "q1").await.unwrap().unwrap();
         assert_eq!(m.student_id, loaded_m.student_id);
         assert_eq!(m.box_level, loaded_m.box_level);
         assert_eq!(m.streak, loaded_m.streak);
@@ -610,8 +611,8 @@ mod tests {
             last_note: Some("筆誤".into()),
             updated_at: now,
         };
-        save_weakness(&mut *conn, &w).await.unwrap();
-        let list = load_weaknesses(&mut *conn, 1, 10).await.unwrap();
+        save_weakness(&mut conn, &w).await.unwrap();
+        let list = load_weaknesses(&mut conn, 1, 10).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].concept_tag, "方位");
         assert_eq!(list[0].score, 2.5);

@@ -32,12 +32,12 @@ async fn ask_tutor(
     Json(payload): Json<AskTutorReq>,
 ) -> Result<Json<TutorReply>, ApiError> {
     let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let session = load_session(&mut *conn, &id)
+    let session = load_session(&mut conn, &id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
 
-    let q = load_question(&mut *conn, &payload.question_id)
+    let q = load_question(&mut conn, &payload.question_id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;

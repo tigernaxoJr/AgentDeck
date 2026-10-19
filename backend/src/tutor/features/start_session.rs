@@ -178,12 +178,12 @@ async fn start_session(
         ended_at: None,
     };
 
-    save_session(&mut *conn, &session)
+    save_session(&mut conn, &session)
         .await
         .map_err(ApiError::from)?;
 
     let first_qid = &queue[0];
-    let q = load_question(&mut *conn, first_qid)
+    let q = load_question(&mut conn, first_qid)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;

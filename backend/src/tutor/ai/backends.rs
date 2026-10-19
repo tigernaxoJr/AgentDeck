@@ -36,17 +36,15 @@ impl Backends {
 
         for id in ["agy", "claude", "gemini", "codex"] {
             let env_bin_key = format!("TUTOR_CLI_BIN_{}", id.to_uppercase());
-            if let Ok(val) = std::env::var(&env_bin_key) {
-                if !val.is_empty() {
+            if let Ok(val) = std::env::var(&env_bin_key)
+                && !val.is_empty() {
                     program_overrides.insert(id.to_string(), val);
                 }
-            }
             let env_model_key = format!("TUTOR_MODEL_{}", id.to_uppercase());
-            if let Ok(val) = std::env::var(&env_model_key) {
-                if !val.is_empty() {
+            if let Ok(val) = std::env::var(&env_model_key)
+                && !val.is_empty() {
                     model_overrides.insert(id.to_string(), val);
                 }
-            }
         }
 
         let main_cfg = BackendConfig {

@@ -135,7 +135,7 @@ async fn handle_enrich(
                 if let Ok(items) = res {
                     for item in items {
                         let where_clause = item.where_clause.or(item.where_alias).unwrap_or_default();
-                        if let Ok(Some(mut q)) = load_question(&mut *conn, &item.id).await {
+                        if let Ok(Some(mut q)) = load_question(&mut conn, &item.id).await {
                             let mut changed = false;
                             if q.book_page.is_none() {
                                 q.book_page = deduced_page;
@@ -152,7 +152,7 @@ async fn handle_enrich(
                                 }
                             }
                             if changed {
-                                let _ = save_question(&mut *conn, &q).await;
+                                let _ = save_question(&mut conn, &q).await;
                             }
                         }
                     }
