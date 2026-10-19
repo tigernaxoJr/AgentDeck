@@ -185,6 +185,11 @@ async fn wrong_twice_hints_then_explains_and_requeues() {
         .await;
     assert_eq!(status, StatusCode::OK, "{h}");
     assert_eq!(h["say"], "想想看，地圖的上方通常代表哪個方位？");
+
+    // 重新載入時對話中的課本指引仍完整（含 where）
+    let (_, view) = app.call("GET", &format!("/api/tutor/sessions/{sid}"), None, None).await;
+    let last = view["dialog"].as_array().and_then(|d| d.last()).cloned().unwrap_or_default();
+    assert_eq!(last["bookRef"]["where"], "上方的地圖", "{view}");
     assert_no_leak(&h);
 
     // 第二次答錯：講解並揭曉，題目排回佇列尾端
@@ -250,6 +255,7 @@ async fn wrong_answer_without_ai_engine_uses_canned_hint() {
     assert_eq!(r["action"], "hint");
     assert!(r.get("hintPending").is_none(), "{r}");
     assert_eq!(r["bookRef"]["page"], 12);
+    assert_eq!(r["bookRef"]["where"], "上方的地圖");
 }
 
 #[tokio::test]

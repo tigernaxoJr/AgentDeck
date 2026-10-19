@@ -5,6 +5,8 @@ use crate::tutor::domain::question::{answer_display, Answer, InputMode, Question
 #[serde(rename_all = "camelCase")]
 pub struct BookRef {
     pub page: i64,
+    /// 前端讀 `where`；alias 讓舊版存進 dialog_turns 的 `whereClause` 仍可讀回
+    #[serde(rename = "where", alias = "whereClause")]
     pub where_clause: String,
 }
 
