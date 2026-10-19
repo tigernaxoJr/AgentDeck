@@ -13,8 +13,8 @@
 - [x] `docker-compose.yml` 改從 `.env` 讀取 API Key，新增 `.env.example`。
 
 ## Step 3 — 啟動流程
-- [ ] `tutor::init` 從 `create_router` 的 `block_in_place` 移到 `main` 的 async 流程，初始化失敗即終止。
-- [ ] `TUTOR_DATA_DIR` 解析為絕對路徑並在啟動時印出。
+- [x] `tutor::init` 從 `create_router` 的 `block_in_place` 移到 `main` 的 async 流程，初始化失敗即終止。
+- [x] `TUTOR_DATA_DIR` 解析為絕對路徑並在啟動時印出。
 
 ## Step 4 — 健壯性與可維護性
 - [ ] 清除請求路徑上的 `unwrap()`／`expect()`，改回傳錯誤。

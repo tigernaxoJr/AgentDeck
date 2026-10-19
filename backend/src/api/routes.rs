@@ -39,7 +39,8 @@ impl AppState {
     }
 }
 
-pub fn create_router(state: AppState) -> Router {
+/// `tutor_router` 由 `main` 先行初始化後傳入，初始化失敗時服務不會啟動。
+pub fn create_router(state: AppState, tutor_router: Router) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(cors_origins())
         .allow_methods(Any)
@@ -62,23 +63,6 @@ pub fn create_router(state: AppState) -> Router {
             state.api_key.clone(),
             require_api_key,
         ));
-
-    let tutor_data_dir = std::path::PathBuf::from(
-        std::env::var("TUTOR_DATA_DIR").unwrap_or_else(|_| "./tutor_data".to_string())
-    );
-
-    // Initial tutor router
-    let tutor_router = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            match crate::tutor::init(tutor_data_dir, state.api_key.clone()).await {
-                Ok((_tutor_state, router)) => router,
-                Err(e) => {
-                    eprintln!("Failed to init tutor system: {e}");
-                    Router::new()
-                }
-            }
-        })
-    });
 
     Router::new()
         .nest("/api/tutor", tutor_router)

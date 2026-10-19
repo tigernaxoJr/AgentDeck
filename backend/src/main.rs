@@ -41,9 +41,24 @@ async fn main() {
     // 4. 建立共享狀態與 Axum Router
     let app_state = AppState::new(scheduler, repo.clone(), api_key.clone());
     let scheduler_ref = app_state.scheduler.clone();
-    let app = create_router(app_state);
 
-    // 5. 綁定連接埠並掛載 Graceful Shutdown 訊號監聽
+    // 5. 初始化 Tutor 子系統（題庫 DB、AI 後端）；失敗即中止，避免只剩 404 的半套服務
+    let tutor_data_dir = std::path::absolute(
+        std::env::var("TUTOR_DATA_DIR").unwrap_or_else(|_| "./tutor_data".to_string()),
+    )
+    .expect("無法解析 TUTOR_DATA_DIR");
+    println!("📚 Tutor 資料目錄: {}", tutor_data_dir.display());
+    let (_tutor_state, tutor_router) =
+        match tutor::init(tutor_data_dir, app_state.api_key.clone()).await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("❌ Tutor 系統初始化失敗: {e}");
+                std::process::exit(1);
+            }
+        };
+    let app = create_router(app_state, tutor_router);
+
+    // 6. 綁定連接埠並掛載 Graceful Shutdown 訊號監聽
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("PORT")
         .ok()
@@ -75,12 +90,12 @@ async fn main() {
         .await
         .expect("Axum 伺服器執行異常");
 
-    // 6. HTTP Server 停止收單後，給予時間終止所有 CLI 子行程並排空佇列
+    // 7. HTTP Server 停止收單後，給予時間終止所有 CLI 子行程並排空佇列
     scheduler_ref
         .shutdown_and_drain(Duration::from_secs(8))
         .await;
 
-    // 7. 將最後的任務取消狀態寫入 SQLite 並關閉連線池
+    // 8. 將最後的任務取消狀態寫入 SQLite 並關閉連線池
     repo.close().await;
     println!("👋 服務已完全停止。");
 }
