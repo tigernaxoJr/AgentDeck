@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqliteConnection};
 
-use crate::tutor::domain::progress::{ConceptWeakness, Mastery};
+use crate::tutor::domain::progress::{next_mastery, update_weakness, ConceptWeakness, Mastery, Outcome};
 use crate::tutor::domain::question::{Answer, InputMode, QType, Question};
 use crate::tutor::domain::session::{QState, Session};
+use crate::tutor::shared::dto::BookRef;
 use crate::tutor::shared::enum_tag;
 
 pub async fn load_question(
@@ -393,6 +394,117 @@ pub async fn save_weakness(
     .execute(conn)
     .await?;
 
+    Ok(())
+}
+
+/// 一次作答紀錄（`attempts` 表的一列）
+pub struct NewAttempt<'a> {
+    pub id: &'a str,
+    pub session: &'a Session,
+    pub question_id: &'a str,
+    pub input_kind: &'a str,
+    pub input_text: Option<&'a str>,
+    pub input_image_path: Option<&'a str>,
+    pub recognized_text: Option<&'a str>,
+    pub verdict: &'a str,
+    pub graded_by: &'a str,
+    pub created_at: DateTime<Utc>,
+}
+
+pub async fn insert_attempt(
+    conn: &mut SqliteConnection,
+    a: &NewAttempt<'_>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO attempts (
+            id, session_id, student_id, question_id, try_no, input_kind,
+            input_text, input_image_path, recognized_text, verdict, graded_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(a.id)
+    .bind(&a.session.id)
+    .bind(a.session.student_id)
+    .bind(a.question_id)
+    .bind(a.session.q_try)
+    .bind(a.input_kind)
+    .bind(a.input_text)
+    .bind(a.input_image_path)
+    .bind(a.recognized_text)
+    .bind(a.verdict)
+    .bind(a.graded_by)
+    .bind(a.created_at.to_rfc3339())
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// 寫入一則對話（`role` 為 `tutor` 或 `student`）
+pub async fn insert_dialog_turn(
+    conn: &mut SqliteConnection,
+    session_id: &str,
+    question_id: &str,
+    role: &str,
+    content: &str,
+    action: &str,
+    book_ref: Option<&BookRef>,
+    created_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    let br_json = book_ref.and_then(|b| serde_json::to_string(b).ok());
+    sqlx::query(
+        r#"
+        INSERT INTO dialog_turns (
+            session_id, question_id, role, content, action, book_ref_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(session_id)
+    .bind(question_id)
+    .bind(role)
+    .bind(content)
+    .bind(action)
+    .bind(br_json)
+    .bind(created_at.to_rfc3339())
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// 一題有結果時更新間隔複習（mastery）與該題所有概念的弱點分數
+pub async fn record_outcome(
+    conn: &mut SqliteConnection,
+    student_id: i64,
+    q: &Question,
+    outcome: Outcome,
+    note: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    let prev_m = load_progress(&mut *conn, student_id, &q.id).await?;
+    let next_m = next_mastery(prev_m, student_id, &q.id, outcome, now);
+    save_progress(&mut *conn, &next_m).await?;
+
+    for tag in &q.concept_tags {
+        let row: Option<(f64, i64, Option<String>)> = sqlx::query_as(
+            "SELECT score, wrong_count, last_note FROM concept_weakness WHERE student_id = ? AND concept_tag = ?",
+        )
+        .bind(student_id)
+        .bind(tag)
+        .fetch_optional(&mut *conn)
+        .await?;
+
+        let prev_w = row.map(|(score, wrong_count, last_note)| ConceptWeakness {
+            student_id,
+            concept_tag: tag.clone(),
+            score,
+            wrong_count,
+            last_note,
+            updated_at: now,
+        });
+
+        let next_w = update_weakness(prev_w, student_id, tag, outcome, note.clone(), now);
+        save_weakness(&mut *conn, &next_w).await?;
+    }
     Ok(())
 }
 

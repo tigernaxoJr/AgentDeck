@@ -1,9 +1,11 @@
+pub mod context;
 pub mod prompts;
 pub mod turn;
 pub mod backends;
 
 pub use backends::Backends;
 pub use prompts::{build_prompt, PromptContext};
+pub use context::build_prompt_context;
 pub use turn::{call_turn, TutorFeedback};
 
 #[cfg(test)]

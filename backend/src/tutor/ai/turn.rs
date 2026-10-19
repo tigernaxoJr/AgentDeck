@@ -6,7 +6,8 @@ use sqlx::SqlitePool;
 
 use ai_cli::{call_json, AiEngine, CallSpec, RunFile};
 use crate::tutor::ai::prompts::{build_prompt, PromptContext};
-use crate::tutor::domain::question::{contains_answer, Verdict};
+use crate::tutor::domain::question::{answer_display, contains_answer, Question, Verdict};
+use crate::tutor::domain::session::TeachAction;
 use crate::tutor::shared::dto::BookRef;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,4 +221,18 @@ pub fn canned_wrong_hint(book_ref: Option<&BookRef>) -> String {
 
 pub fn canned_wrong_explain(answer_display: &str, explanation: &str) -> String {
     format!("我們一起看答案：{}。{}", answer_display, explanation)
+}
+
+/// 答錯時的罐頭回覆：第一次給課本頁碼提示，第二次直接講解答案
+pub fn canned_wrong_reply(q: &Question, action: TeachAction) -> (String, Option<BookRef>) {
+    let br = q.book_page.map(|p| BookRef {
+        page: p,
+        where_clause: q.book_where.clone().unwrap_or_default(),
+    });
+    let say = if action == TeachAction::Explain {
+        canned_wrong_explain(&answer_display(q), &q.explanation)
+    } else {
+        canned_wrong_hint(br.as_ref())
+    };
+    (say, br)
 }

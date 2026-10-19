@@ -133,6 +133,7 @@ version = "0.1.0"
 dependencies = [
  "ai-cli",
  "axum",
+ "base64",
  "chrono",
  "dashmap",
  "serde",

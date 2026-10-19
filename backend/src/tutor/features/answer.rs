@@ -4,28 +4,29 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use base64::Engine as _;
 use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use ai_cli::{AiPurpose, RunFile};
-use crate::tutor::ai::prompts::{PromptContext, PromptDialogItem, PromptWeakConcept};
-use crate::tutor::ai::turn::{
-    call_turn, canned_praise, canned_wrong_explain, canned_wrong_hint, TutorFeedback,
-};
-use crate::tutor::domain::progress::{next_mastery, update_weakness};
-use crate::tutor::domain::question::{
-    answer_display, describe_choice, grade_choice, ChoiceInput, Question, Verdict,
-};
+use crate::tutor::ai::build_prompt_context;
+use crate::tutor::ai::prompts::build_context_json;
+use crate::tutor::ai::turn::{call_turn, canned_praise, canned_wrong_reply, TutorFeedback};
+use crate::tutor::domain::question::{describe_choice, grade_choice, ChoiceInput, QType, Question, Verdict};
 use crate::tutor::domain::session::{QState, Session, TeachAction};
-use crate::tutor::shared::dto::{BookRef, RevealInfo, TutorReply};
+use crate::tutor::shared::dto::{RevealInfo, TutorReply};
+use crate::tutor::shared::enum_tag;
 use crate::tutor::shared::error::ApiError;
 use crate::tutor::store::{
-    load_progress, load_question, load_session, load_weaknesses, save_progress, save_session,
-    save_weakness,
+    insert_attempt, insert_dialog_turn, load_question, load_session, record_outcome, save_session,
+    NewAttempt,
 };
 use crate::tutor::TutorState;
-use crate::tutor::shared::enum_tag;
+
+const MAX_IMAGE_BYTES: usize = 3 * 1024 * 1024;
+const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+const AI_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Deserialize)]
 pub struct AnswerReq {
@@ -56,15 +57,59 @@ pub fn routes() -> Router<TutorState> {
         .route("/sessions/{id}/hint", post(handle_hint))
 }
 
-struct SessionUnlocker {
+/// 同一個 session 同時只處理一個作答請求；drop 時自動解鎖
+struct SessionLock {
     sid: String,
     locks: std::sync::Arc<dashmap::DashMap<String, ()>>,
 }
 
-impl Drop for SessionUnlocker {
+impl SessionLock {
+    fn acquire(state: &TutorState, sid: &str) -> Result<Self, ApiError> {
+        if state.session_locks.insert(sid.to_string(), ()).is_some() {
+            return Err(ApiError::Conflict("Another request is processing for this session".into()));
+        }
+        Ok(Self {
+            sid: sid.to_string(),
+            locks: state.session_locks.clone(),
+        })
+    }
+}
+
+impl Drop for SessionLock {
     fn drop(&mut self) {
         self.locks.remove(&self.sid);
     }
+}
+
+/// 載入 session 與目前題目，並確認題目仍在作答中
+async fn load_answerable(
+    conn: &mut sqlx::SqliteConnection,
+    sid: &str,
+    question_id: &str,
+) -> Result<(Session, Question), ApiError> {
+    let session = load_session(&mut *conn, sid)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
+
+    if session.current_question_id() != Some(question_id) {
+        return Err(ApiError::BadRequest("Question ID does not match current question".into()));
+    }
+    if !matches!(session.q_state, QState::Asking | QState::Hinting) {
+        return Err(ApiError::Conflict("Current question is already completed".into()));
+    }
+
+    let q = load_question(&mut *conn, question_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
+    Ok((session, q))
+}
+
+/// 批改結果：規則批改沒有 AI 回饋
+struct Graded {
+    verdict: Verdict,
+    graded_by: &'static str,
+    feedback: Option<TutorFeedback>,
+    choice_desc: Option<String>,
 }
 
 async fn handle_answer(
@@ -72,105 +117,39 @@ async fn handle_answer(
     Path(id): Path<String>,
     Json(payload): Json<AnswerReq>,
 ) -> Result<Json<TutorReply>, ApiError> {
-    // 1. Session concurrency lock
-    if state.session_locks.insert(id.clone(), ()).is_some() {
-        return Err(ApiError::Conflict("Another request is processing for this session".into()));
-    }
-    let _guard = SessionUnlocker {
-        sid: id.clone(),
-        locks: state.session_locks.clone(),
-    };
-
-    let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let mut session = load_session(&mut *conn, &id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
-
-    if session.current_question_id() != Some(&payload.question_id) {
-        return Err(ApiError::BadRequest("Question ID does not match current question".into()));
-    }
-
-    if !matches!(session.q_state, QState::Asking | QState::Hinting) {
-        return Err(ApiError::Conflict("Current question is already completed".into()));
-    }
-
-    let q = load_question(&mut *conn, &payload.question_id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
+    let _lock = SessionLock::acquire(&state, &id)?;
+    let mut conn = state.pool.acquire().await?;
+    let (mut session, q) = load_answerable(&mut conn, &id, &payload.question_id).await?;
 
     let now = Utc::now();
     let attempt_id = Uuid::new_v4().to_string();
 
-    // 2. Decode image if handwriting
-    let mut input_image_path = None;
-    let mut image_bytes = None;
-    if payload.kind == "handwriting" {
-        if let Some(ref b64) = payload.image_png_base64 {
-            let clean_b64 = b64.trim().trim_start_matches("data:image/png;base64,");
-            let raw_bytes = base64_simd_or_standard_decode(clean_b64)
-                .map_err(|e| ApiError::BadRequest(format!("Invalid base64 image: {e}")))?;
-
-            if raw_bytes.len() > 3 * 1024 * 1024 {
-                return Err(ApiError::BadRequest("Image exceeds 3MB limit".into()));
-            }
-            // PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
-            if raw_bytes.len() < 8 || &raw_bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
-                return Err(ApiError::BadRequest("Image must be valid PNG format".into()));
-            }
-
-            let file_rel = format!("answers/{attempt_id}.png");
-            let file_abs = state.data_dir.join(&file_rel);
-            if let Some(parent) = file_abs.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            tokio::fs::write(&file_abs, &raw_bytes)
-                .await
-                .map_err(|e| ApiError::Internal(format!("Failed to save answer image: {e}")))?;
-
-            input_image_path = Some(file_rel);
-            image_bytes = Some(raw_bytes);
-        } else {
-            return Err(ApiError::BadRequest("Missing image for handwriting".into()));
-        }
-    }
-
-    // 3. Grading (Rule vs AI)
-    let is_rule_gradable = matches!(payload.kind.as_str(), "choice")
-        || (payload.kind == "text" && matches!(q.qtype, crate::tutor::domain::question::QType::TrueFalse | crate::tutor::domain::question::QType::SingleChoice));
-
-    let graded_by;
-    let verdict;
-    let mut recognized_text = None;
-    let mut ai_feedback: Option<TutorFeedback> = None;
-    let self_grade_available = false;
-    let mut choice_desc: Option<String> = None;
-
-    if is_rule_gradable {
-        // API：是非題送 true/false，選擇題送 1-based 題號
-        let input = match &payload.choice {
-            Some(serde_json::Value::Bool(b)) => ChoiceInput::Bool(*b),
-            Some(serde_json::Value::Number(n)) => {
-                ChoiceInput::Index((n.as_i64().unwrap_or(1) - 1).max(0) as usize)
-            }
-            Some(serde_json::Value::String(s)) => ChoiceInput::Text(s),
-            _ => {
-                if let Some(ref t) = payload.text {
-                    ChoiceInput::Text(t)
-                } else {
-                    ChoiceInput::Text("")
-                }
-            }
-        };
-        verdict = grade_choice(&q, &input);
-        choice_desc = Some(describe_choice(&q, &input));
-        graded_by = "rule";
+    let handwriting = if payload.kind == "handwriting" {
+        let b64 = payload
+            .image_png_base64
+            .as_deref()
+            .ok_or_else(|| ApiError::BadRequest("Missing image for handwriting".into()))?;
+        Some(save_handwriting_png(&state, &attempt_id, b64).await?)
     } else {
-        // Need AI grading
-        let vision_engines = state.ai.engines_for(AiPurpose::GradeHandwriting).await;
-        if vision_engines.is_empty() {
-            // No vision engine available -> fallback to self-grade
+        None
+    };
+
+    // 1. 批改：是非/選擇題用規則，其餘交給 vision AI
+    let is_rule_gradable = payload.kind == "choice"
+        || (payload.kind == "text" && matches!(q.qtype, QType::TrueFalse | QType::SingleChoice));
+
+    let graded = if is_rule_gradable {
+        let input = choice_input(&payload);
+        Graded {
+            verdict: grade_choice(&q, &input),
+            graded_by: "rule",
+            feedback: None,
+            choice_desc: Some(describe_choice(&q, &input)),
+        }
+    } else {
+        let engines = state.ai.engines_for(AiPurpose::GradeHandwriting).await;
+        if engines.is_empty() {
+            // 沒有 vision 引擎 → 讓孩子看標準答案自己對
             return Ok(Json(TutorReply {
                 verdict: "none".into(),
                 say: "目前 AI 辨識尚未連線，請點選標準答案自己對答案喔！".into(),
@@ -185,205 +164,186 @@ async fn handle_answer(
                 hint_pending: None,
             }));
         }
-
-        let ctx = build_prompt_context(&mut conn, &session, &q, None, None).await?;
-        let mut run_files = vec![
-            RunFile {
-                name: "context.json".into(),
-                bytes: crate::tutor::ai::prompts::build_context_json(&ctx).into_bytes(),
-            },
-        ];
-        let mut images = Vec::new();
-
-        if let Some(bytes) = image_bytes {
-            run_files.push(RunFile {
-                name: "answer.png".into(),
-                bytes,
-            });
-            images.push("answer.png".into());
+        let image = handwriting.as_ref().map(|(_, bytes)| bytes.clone());
+        let fb = grade_with_ai(&state, &mut conn, &session, &q, &engines, image).await?;
+        Graded {
+            verdict: fb.verdict,
+            graded_by: "ai",
+            feedback: Some(fb),
+            choice_desc: None,
         }
+    };
 
-        if let Some(ref img_path) = q.image_path {
-            let full_p = state.data_dir.join("assets").join(img_path);
-            if full_p.exists() {
-                if let Ok(bytes) = tokio::fs::read(&full_p).await {
-                    run_files.push(RunFile {
-                        name: "question.png".into(),
-                        bytes,
-                    });
-                    images.push("question.png".into());
-                }
-            }
-        }
+    // 2. 狀態轉移由 domain 決定
+    let step = session.apply_verdict(graded.verdict, now);
 
-        // Concurrency semaphore
-        let _permit = state.ai_sem.acquire().await.map_err(|e| ApiError::Internal(e.to_string()))?;
-
-        let fb = call_turn(
-            &vision_engines,
-            AiPurpose::GradeHandwriting,
-            &ctx,
-            run_files,
-            images,
-            &state.pool,
-            Some(&session.id),
-            Duration::from_secs(90),
-        )
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-        verdict = fb.verdict;
-        recognized_text = Some(fb.recognized_text.clone());
-        ai_feedback = Some(fb);
-        graded_by = "ai";
-    }
-
-    // 4. Session state transition
-    let step = session.apply_verdict(verdict, now);
-
-    // 5. Tutor reply (rule-graded wrong answers get the AI hint via /hint)
-    let tutor_say: String;
-    let tutor_action = enum_tag(&step.action);
+    // 3. 家教回覆（規則批改答錯時先回罐頭語，AI 提示由 /hint 另外取，避免孩子乾等）
+    let action = enum_tag(&step.action);
     let mut book_ref = None;
     let mut followup_q = None;
     let mut hint_pending = false;
-
-    if let Some(ref fb) = ai_feedback {
-        tutor_say = fb.say.clone();
-        book_ref = if step.action == TeachAction::Praise {
-            None
-        } else {
-            fb.book_ref.clone()
-        };
-        followup_q = fb.followup_question.clone();
-    } else {
-        match step.action {
-            TeachAction::Praise => {
-                tutor_say = canned_praise().to_string();
+    let say = match (&graded.feedback, step.action) {
+        (Some(fb), action) => {
+            if action != TeachAction::Praise {
+                book_ref = fb.book_ref.clone();
             }
-            TeachAction::Hint | TeachAction::Explain => {
-                // 規則批改馬上回對錯；AI 提示改由 /hint 另外取，避免孩子乾等
-                let (say, br) = canned_wrong_reply(&q, step.action);
-                tutor_say = say;
-                book_ref = br;
-                hint_pending = !state.ai.engines_for(AiPurpose::TutorWrong).await.is_empty();
-            }
-            TeachAction::RetryUnreadable => {
-                tutor_say = "字跡有點不清楚，請寫大一點、慢一點再試一次喔！".to_string();
-            }
+            followup_q = fb.followup_question.clone();
+            fb.say.clone()
         }
-    }
-
-    // 6. Persist in single transaction
-    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
-
-    // Insert attempt
-    let verdict_str = enum_tag(&verdict);
-    let input_text = choice_desc.or(payload.text);
-    sqlx::query(
-        r#"
-        INSERT INTO attempts (
-            id, session_id, student_id, question_id, try_no, input_kind,
-            input_text, input_image_path, recognized_text, verdict, graded_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&attempt_id)
-    .bind(&session.id)
-    .bind(session.student_id)
-    .bind(&q.id)
-    .bind(session.q_try)
-    .bind(&payload.kind)
-    .bind(input_text)
-    .bind(input_image_path)
-    .bind(&recognized_text)
-    .bind(&verdict_str)
-    .bind(graded_by)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx)
-    .await
-    .map_err(ApiError::from)?;
-
-    // Insert dialog turn（提示待 AI 補上時，由 /hint 寫入）
-    if !hint_pending {
-        let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
-        sqlx::query(
-            r#"
-            INSERT INTO dialog_turns (
-                session_id, question_id, role, content, action, book_ref_json, created_at
-            ) VALUES (?, ?, 'tutor', ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&session.id)
-        .bind(&q.id)
-        .bind(&tutor_say)
-        .bind(&tutor_action)
-        .bind(br_json)
-        .bind(now.to_rfc3339())
-        .execute(&mut *tx)
-        .await
-        .map_err(ApiError::from)?;
-    }
-
-    // Save session
-    save_session(&mut *tx, &session).await.map_err(ApiError::from)?;
-
-    // Update mastery & weakness if outcome reached
-    if let Some(outcome) = step.outcome {
-        let prev_m = load_progress(&mut *tx, session.student_id, &q.id).await.map_err(ApiError::from)?;
-        let next_m = next_mastery(prev_m, session.student_id, &q.id, outcome, now);
-        save_progress(&mut *tx, &next_m).await.map_err(ApiError::from)?;
-
-        let note = ai_feedback.as_ref().and_then(|f| f.misconception.clone());
-        for tag in &q.concept_tags {
-            let row: Option<(f64, i64, Option<String>)> = sqlx::query_as(
-                "SELECT score, wrong_count, last_note FROM concept_weakness WHERE student_id = ? AND concept_tag = ?"
-            )
-            .bind(session.student_id)
-            .bind(tag)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(ApiError::from)?;
-
-            let prev_w = row.map(|(score, wrong_count, last_note)| {
-                crate::tutor::domain::progress::ConceptWeakness {
-                    student_id: session.student_id,
-                    concept_tag: tag.clone(),
-                    score,
-                    wrong_count,
-                    last_note,
-                    updated_at: now,
-                }
-            });
-
-            let next_w = update_weakness(prev_w, session.student_id, tag, outcome, note.clone(), now);
-            save_weakness(&mut *tx, &next_w).await.map_err(ApiError::from)?;
+        (None, TeachAction::Praise) => canned_praise().to_string(),
+        (None, TeachAction::Hint | TeachAction::Explain) => {
+            let (say, br) = canned_wrong_reply(&q, step.action);
+            book_ref = br;
+            hint_pending = !state.ai.engines_for(AiPurpose::TutorWrong).await.is_empty();
+            say
         }
-    }
-
-    tx.commit().await.map_err(ApiError::from)?;
-
-    let reveal = if step.reveal {
-        Some(RevealInfo::for_question(&q))
-    } else {
-        None
+        (None, TeachAction::RetryUnreadable) => {
+            "字跡有點不清楚，請寫大一點、慢一點再試一次喔！".to_string()
+        }
     };
 
-    let q_state_str = enum_tag(&session.q_state);
+    // 4. 單一交易寫入
+    let verdict = enum_tag(&graded.verdict);
+    let recognized_text = graded.feedback.as_ref().map(|f| f.recognized_text.clone());
+    let input_text = graded.choice_desc.or(payload.text);
+    let mut tx = state.pool.begin().await?;
+
+    insert_attempt(
+        &mut tx,
+        &NewAttempt {
+            id: &attempt_id,
+            session: &session,
+            question_id: &q.id,
+            input_kind: &payload.kind,
+            input_text: input_text.as_deref(),
+            input_image_path: handwriting.as_ref().map(|(path, _)| path.as_str()),
+            recognized_text: recognized_text.as_deref(),
+            verdict: &verdict,
+            graded_by: graded.graded_by,
+            created_at: now,
+        },
+    )
+    .await?;
+
+    // 提示待 AI 補上時，對話由 /hint 寫入
+    if !hint_pending {
+        insert_dialog_turn(&mut tx, &session.id, &q.id, "tutor", &say, &action, book_ref.as_ref(), now)
+            .await?;
+    }
+
+    save_session(&mut tx, &session).await?;
+
+    if let Some(outcome) = step.outcome {
+        let note = graded.feedback.as_ref().and_then(|f| f.misconception.clone());
+        record_outcome(&mut tx, session.student_id, &q, outcome, note, now).await?;
+    }
+
+    tx.commit().await?;
 
     Ok(Json(TutorReply {
-        verdict: verdict_str,
-        say: tutor_say,
-        action: tutor_action,
+        verdict,
+        say,
+        action,
         book_ref,
         recognized_text,
         followup_question: followup_q,
-        q_state: q_state_str,
-        reveal,
+        q_state: enum_tag(&session.q_state),
+        reveal: step.reveal.then(|| RevealInfo::for_question(&q)),
         can_next: session.can_next(),
-        self_grade_available: Some(self_grade_available),
+        self_grade_available: Some(false),
         hint_pending: hint_pending.then_some(true),
     }))
+}
+
+/// API：是非題送 true/false，選擇題送 1-based 題號，也接受文字
+fn choice_input(payload: &AnswerReq) -> ChoiceInput<'_> {
+    match &payload.choice {
+        Some(serde_json::Value::Bool(b)) => ChoiceInput::Bool(*b),
+        Some(serde_json::Value::Number(n)) => {
+            ChoiceInput::Index((n.as_i64().unwrap_or(1) - 1).max(0) as usize)
+        }
+        Some(serde_json::Value::String(s)) => ChoiceInput::Text(s),
+        _ => ChoiceInput::Text(payload.text.as_deref().unwrap_or("")),
+    }
+}
+
+/// 驗證並存下手寫 PNG，回傳（相對 data_dir 的路徑, 圖檔位元組）
+async fn save_handwriting_png(
+    state: &TutorState,
+    attempt_id: &str,
+    b64: &str,
+) -> Result<(String, Vec<u8>), ApiError> {
+    let clean: String = b64
+        .trim()
+        .trim_start_matches("data:image/png;base64,")
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(clean)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid base64 image: {e}")))?;
+
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(ApiError::BadRequest("Image exceeds 3MB limit".into()));
+    }
+    if !bytes.starts_with(PNG_MAGIC) {
+        return Err(ApiError::BadRequest("Image must be valid PNG format".into()));
+    }
+
+    let file_rel = format!("answers/{attempt_id}.png");
+    let file_abs = state.data_dir.join(&file_rel);
+    if let Some(parent) = file_abs.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    tokio::fs::write(&file_abs, &bytes)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to save answer image: {e}")))?;
+
+    Ok((file_rel, bytes))
+}
+
+/// 手寫／簡答題交給 vision AI 批改；題目有插圖時一併附上
+async fn grade_with_ai(
+    state: &TutorState,
+    conn: &mut sqlx::SqliteConnection,
+    session: &Session,
+    q: &Question,
+    engines: &[std::sync::Arc<dyn ai_cli::AiEngine>],
+    answer_png: Option<Vec<u8>>,
+) -> Result<TutorFeedback, ApiError> {
+    let ctx = build_prompt_context(conn, session, q, session.q_try + 1, None, None).await?;
+    let mut run_files = vec![RunFile {
+        name: "context.json".into(),
+        bytes: build_context_json(&ctx).into_bytes(),
+    }];
+    let mut images = Vec::new();
+
+    if let Some(bytes) = answer_png {
+        run_files.push(RunFile { name: "answer.png".into(), bytes });
+        images.push("answer.png".into());
+    }
+
+    if let Some(ref img_path) = q.image_path {
+        let full_p = state.data_dir.join("assets").join(img_path);
+        if let Ok(bytes) = tokio::fs::read(&full_p).await {
+            run_files.push(RunFile { name: "question.png".into(), bytes });
+            images.push("question.png".into());
+        }
+    }
+
+    let _permit = state.ai_sem.acquire().await.map_err(|e| ApiError::Internal(e.to_string()))?;
+    call_turn(
+        engines,
+        AiPurpose::GradeHandwriting,
+        &ctx,
+        run_files,
+        images,
+        &state.pool,
+        Some(&session.id),
+        AI_TIMEOUT,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 async fn handle_self_grade(
@@ -391,86 +351,53 @@ async fn handle_self_grade(
     Path(id): Path<String>,
     Json(payload): Json<SelfGradeReq>,
 ) -> Result<Json<TutorReply>, ApiError> {
-    let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
-    let mut session = load_session(&mut *conn, &id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
-
-    if session.current_question_id() != Some(&payload.question_id) {
-        return Err(ApiError::BadRequest("Question ID does not match current question".into()));
-    }
-
-    let q = load_question(&mut *conn, &payload.question_id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
+    let _lock = SessionLock::acquire(&state, &id)?;
+    let mut conn = state.pool.acquire().await?;
+    let (mut session, q) = load_answerable(&mut conn, &id, &payload.question_id).await?;
 
     let now = Utc::now();
-    let verdict = if payload.correct {
-        Verdict::Correct
-    } else {
-        Verdict::Incorrect
-    };
-
+    let verdict = if payload.correct { Verdict::Correct } else { Verdict::Incorrect };
     let step = session.apply_verdict(verdict, now);
-
-    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
-
-    // Record attempt
-    let attempt_id = Uuid::new_v4().to_string();
     let verdict_str = enum_tag(&verdict);
-    sqlx::query(
-        r#"
-        INSERT INTO attempts (
-            id, session_id, student_id, question_id, try_no, input_kind,
-            input_text, verdict, graded_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'self', ?, ?, 'self', ?)
-        "#,
+
+    let mut tx = state.pool.begin().await?;
+    insert_attempt(
+        &mut tx,
+        &NewAttempt {
+            id: &Uuid::new_v4().to_string(),
+            session: &session,
+            question_id: &q.id,
+            input_kind: "self",
+            input_text: Some(if payload.correct { "自評正確" } else { "自評錯誤" }),
+            input_image_path: None,
+            recognized_text: None,
+            verdict: &verdict_str,
+            graded_by: "self",
+            created_at: now,
+        },
     )
-    .bind(&attempt_id)
-    .bind(&session.id)
-    .bind(session.student_id)
-    .bind(&q.id)
-    .bind(session.q_try)
-    .bind(if payload.correct { "自評正確" } else { "自評錯誤" })
-    .bind(&verdict_str)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx)
-    .await
-    .map_err(ApiError::from)?;
-
-    save_session(&mut *tx, &session).await.map_err(ApiError::from)?;
-
+    .await?;
+    save_session(&mut tx, &session).await?;
     if let Some(outcome) = step.outcome {
-        let prev_m = load_progress(&mut *tx, session.student_id, &q.id).await.map_err(ApiError::from)?;
-        let next_m = next_mastery(prev_m, session.student_id, &q.id, outcome, now);
-        save_progress(&mut *tx, &next_m).await.map_err(ApiError::from)?;
+        record_outcome(&mut tx, session.student_id, &q, outcome, None, now).await?;
     }
-
-    tx.commit().await.map_err(ApiError::from)?;
+    tx.commit().await?;
 
     let say = if payload.correct {
-        "太棒了！自己對答案也做得很誠實喔！".to_string()
+        "太棒了！自己對答案也做得很誠實喔！"
     } else {
-        "沒關係，再練習一次就會記住了！".to_string()
-    };
-
-    let reveal = if step.reveal {
-        Some(RevealInfo::for_question(&q))
-    } else {
-        None
+        "沒關係，再練習一次就會記住了！"
     };
 
     Ok(Json(TutorReply {
         verdict: verdict_str,
-        say,
+        say: say.to_string(),
         action: enum_tag(&step.action),
         book_ref: None,
         recognized_text: None,
         followup_question: None,
         q_state: enum_tag(&session.q_state),
-        reveal,
+        reveal: step.reveal.then(|| RevealInfo::for_question(&q)),
         can_next: session.can_next(),
         self_grade_available: Some(false),
         hint_pending: None,
@@ -489,15 +416,13 @@ async fn handle_hint(
         _ => return Err(ApiError::BadRequest("action must be hint or explain".into())),
     };
 
-    let mut conn = state.pool.acquire().await.map_err(ApiError::from)?;
+    let mut conn = state.pool.acquire().await?;
     let session = load_session(&mut *conn, &id)
-        .await
-        .map_err(ApiError::from)?
+        .await?
         .ok_or_else(|| ApiError::NotFound("Session not found".into()))?;
 
     let q = load_question(&mut *conn, &payload.question_id)
-        .await
-        .map_err(ApiError::from)?
+        .await?
         .ok_or_else(|| ApiError::NotFound("Question not found".into()))?;
 
     let last_input: Option<(Option<String>,)> = sqlx::query_as(
@@ -506,8 +431,7 @@ async fn handle_hint(
     .bind(&session.id)
     .bind(&q.id)
     .fetch_optional(&mut *conn)
-    .await
-    .map_err(ApiError::from)?;
+    .await?;
     let choice_str = last_input.and_then(|(t,)| t);
 
     let (mut say, mut book_ref) = canned_wrong_reply(&q, action);
@@ -515,10 +439,10 @@ async fn handle_hint(
 
     let engines = state.ai.engines_for(AiPurpose::TutorWrong).await;
     if !engines.is_empty() {
-        let ctx = build_prompt_context(&mut conn, &session, &q, choice_str, None).await?;
+        let ctx = build_prompt_context(&mut conn, &session, &q, session.q_try + 1, choice_str, None).await?;
         let run_files = vec![RunFile {
             name: "context.json".into(),
-            bytes: crate::tutor::ai::prompts::build_context_json(&ctx).into_bytes(),
+            bytes: build_context_json(&ctx).into_bytes(),
         }];
         let _permit = state.ai_sem.acquire().await.map_err(|e| ApiError::Internal(e.to_string()))?;
         match call_turn(
@@ -529,7 +453,7 @@ async fn handle_hint(
             vec![],
             &state.pool,
             Some(&session.id),
-            Duration::from_secs(90),
+            AI_TIMEOUT,
         )
         .await
         {
@@ -544,23 +468,8 @@ async fn handle_hint(
     }
 
     let action_str = enum_tag(&action);
-    let br_json = book_ref.as_ref().map(|b| serde_json::to_string(b).unwrap());
-    sqlx::query(
-        r#"
-        INSERT INTO dialog_turns (
-            session_id, question_id, role, content, action, book_ref_json, created_at
-        ) VALUES (?, ?, 'tutor', ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&session.id)
-    .bind(&q.id)
-    .bind(&say)
-    .bind(&action_str)
-    .bind(br_json)
-    .bind(Utc::now().to_rfc3339())
-    .execute(&mut *conn)
-    .await
-    .map_err(ApiError::from)?;
+    insert_dialog_turn(&mut conn, &session.id, &q.id, "tutor", &say, &action_str, book_ref.as_ref(), Utc::now())
+        .await?;
 
     Ok(Json(TutorReply {
         verdict: "incorrect".into(),
@@ -575,112 +484,4 @@ async fn handle_hint(
         self_grade_available: None,
         hint_pending: None,
     }))
-}
-
-/// 答錯時的罐頭回覆：第一次給課本頁碼提示，第二次直接講解答案
-fn canned_wrong_reply(q: &Question, action: TeachAction) -> (String, Option<BookRef>) {
-    let br = q.book_page.map(|p| BookRef {
-        page: p,
-        where_clause: q.book_where.clone().unwrap_or_default(),
-    });
-    let say = if action == TeachAction::Explain {
-        canned_wrong_explain(&answer_display(q), &q.explanation)
-    } else {
-        canned_wrong_hint(br.as_ref())
-    };
-    (say, br)
-}
-
-async fn build_prompt_context(
-    conn: &mut sqlx::SqliteConnection,
-    session: &Session,
-    q: &Question,
-    choice: Option<String>,
-    msg: Option<String>,
-) -> Result<PromptContext, ApiError> {
-    let student_row: (String, i64) = sqlx::query_as("SELECT name, grade FROM students WHERE id = ?")
-        .bind(session.student_id)
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(ApiError::from)?;
-
-    let sub_row: Option<(String, String)> = sqlx::query_as("SELECT name, book_title FROM subjects WHERE id = ?")
-        .bind(&session.subject_id)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(ApiError::from)?;
-
-    let (subject_name, book_title) = sub_row.unwrap_or_else(|| (session.subject_id.clone(), "課本".into()));
-
-    let dialog_rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role, content FROM dialog_turns WHERE session_id = ? AND question_id = ? ORDER BY id ASC LIMIT 10"
-    )
-    .bind(&session.id)
-    .bind(&q.id)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(ApiError::from)?;
-
-    let dialog = dialog_rows
-        .into_iter()
-        .map(|(role, content)| PromptDialogItem { role, content })
-        .collect();
-
-    let weak_items = load_weaknesses(&mut *conn, session.student_id, 5)
-        .await
-        .map_err(ApiError::from)?;
-
-    let weak_concepts = weak_items
-        .into_iter()
-        .map(|w| PromptWeakConcept {
-            tag: w.concept_tag,
-            score: w.score,
-            note: w.last_note,
-        })
-        .collect();
-
-    Ok(PromptContext {
-        student_name: student_row.0,
-        student_grade: student_row.1,
-        subject_name,
-        book_title,
-        question: q.clone(),
-        try_no: session.q_try + 1,
-        dialog,
-        weak_concepts,
-        student_choice: choice,
-        student_message: msg,
-        q_state: session.q_state,
-    })
-}
-
-fn base64_simd_or_standard_decode(s: &str) -> Result<Vec<u8>, String> {
-    // Standard base64 decoding helper without extra dependencies
-    let mut table = [0u8; 256];
-    for (i, &b) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".iter().enumerate() {
-        table[b as usize] = i as u8;
-    }
-
-    let clean: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if clean.len() % 4 != 0 {
-        return Err("Invalid base64 length".into());
-    }
-
-    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
-    for chunk in clean.chunks(4) {
-        let b0 = table[chunk[0] as usize];
-        let b1 = table[chunk[1] as usize];
-        let b2 = table[chunk[2] as usize];
-        let b3 = table[chunk[3] as usize];
-
-        let triple = ((b0 as u32) << 18) | ((b1 as u32) << 12) | ((b2 as u32) << 6) | (b3 as u32);
-        out.push(((triple >> 16) & 0xFF) as u8);
-        if chunk[2] != b'=' {
-            out.push(((triple >> 8) & 0xFF) as u8);
-        }
-        if chunk[3] != b'=' {
-            out.push((triple & 0xFF) as u8);
-        }
-    }
-    Ok(out)
 }
