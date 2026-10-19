@@ -28,9 +28,9 @@
 - [x] GitHub Actions：`cargo test`、`cargo clippy -D warnings`、`pnpm build`、`pnpm test`（先以 `clippy --fix` 清掉既有警告；Docker 映像升到 rust 1.90，因 let-chains 需 1.88+；需真實題庫的測試在找不到素材時跳過）。
 
 ## Step 7 — 文件與目錄整理
-- [ ] 更新 README（實際目錄、Tutor 系統、啟動方式、環境變數）。
-- [ ] 題庫 Python 腳本移到 `tools/bank-pipeline/`，路徑改由參數／環境變數提供，附 README。
-- [ ] `doc/design*.md` 依主題重新命名並加上 `doc/README.md` 索引。
+- [x] 更新 README（實際目錄、Tutor 系統、啟動方式、環境變數）。
+- [x] 題庫 Python 腳本移到 `tools/bank-pipeline/`，路徑改由參數／環境變數提供，附 README。
+- [x] `doc/design*.md` 依主題重新命名並加上 `doc/README.md` 索引（空白的 `design5.md` 已刪除）。
 
 ## Step 8 — Console 改用 ai-cli（T-22）
 - [ ] `executor/runner.rs` 透過 `ai_cli` 的 adapter 組 CLI 指令，移除重複的旗標組裝。
