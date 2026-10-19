@@ -58,7 +58,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/workspaces", get(list_workspaces_handler))
         .route("/ws", get(ws_handler))
         .route_layer(middleware::from_fn_with_state(
-            state.clone(),
+            state.api_key.clone(),
             require_api_key,
         ));
 
@@ -69,7 +69,7 @@ pub fn create_router(state: AppState) -> Router {
     // Initial tutor router
     let tutor_router = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            match crate::tutor::init(tutor_data_dir).await {
+            match crate::tutor::init(tutor_data_dir, state.api_key.clone()).await {
                 Ok((_tutor_state, router)) => router,
                 Err(e) => {
                     eprintln!("Failed to init tutor system: {e}");

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use axum::Router;
+use axum::{middleware, Router};
 use dashmap::DashMap;
 use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
@@ -23,7 +23,7 @@ pub struct TutorState {
     pub session_locks: Arc<DashMap<String, ()>>,
 }
 
-pub async fn init(data_dir: PathBuf) -> Result<(TutorState, Router), Box<dyn std::error::Error>> {
+pub async fn init(data_dir: PathBuf, api_key: Arc<String>) -> Result<(TutorState, Router), Box<dyn std::error::Error>> {
     let pool = shared::db::open(&data_dir).await?;
 
     // Auto import if questions table is empty
@@ -69,23 +69,31 @@ pub async fn init(data_dir: PathBuf) -> Result<(TutorState, Router), Box<dyn std
         session_locks: Arc::new(DashMap::new()),
     };
 
-    let router = routes(state.clone());
+    let router = routes(state.clone(), api_key);
     Ok((state, router))
 }
 
-pub fn routes(state: TutorState) -> Router {
+/// 學童端路由開放使用；`/admin/*`（換 AI 後端、呼叫 CLI、改題庫）需 API Key。
+pub fn routes(state: TutorState, api_key: Arc<String>) -> Router {
+    let admin = Router::new()
+        .merge(features::bank_import::routes())
+        .merge(features::bank_admin::routes())
+        .merge(features::ai_admin::routes())
+        .merge(features::bank_enrich::routes())
+        .route_layer(middleware::from_fn_with_state(
+            api_key,
+            crate::api::auth::require_api_key,
+        ));
+
     Router::new()
         .merge(features::students::routes())
         .merge(features::catalog::routes())
         .merge(features::assets::routes())
-        .merge(features::bank_import::routes())
         .merge(features::start_session::routes())
         .merge(features::session_nav::routes())
         .merge(features::answer::routes())
         .merge(features::ask_tutor::routes())
         .merge(features::report::routes())
-        .merge(features::bank_admin::routes())
-        .merge(features::ai_admin::routes())
-        .merge(features::bank_enrich::routes())
+        .merge(admin)
         .with_state(state)
 }

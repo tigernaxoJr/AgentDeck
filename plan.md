@@ -4,9 +4,9 @@
 > 每一步完成後各自在 `main` 上 commit。勾選代表已完成。
 
 ## Step 1 — 安全：綁定位址與 Tutor 管理端點驗證
-- [ ] `HOST` 預設改為 `127.0.0.1`。
-- [ ] 綁定非本機位址且 `ANTIGRAVITY_API_KEY` 為空時拒絕啟動（防止內網無驗證曝露）。
-- [ ] `/api/tutor/admin/*` 套用 `require_api_key`；前端 Tutor HTTP client 帶上 API Key。
+- [x] `HOST` 預設改為 `127.0.0.1`。
+- [x] 綁定非本機位址且 `ANTIGRAVITY_API_KEY` 為空時拒絕啟動（防止內網無驗證曝露；可用 `ANTIGRAVITY_ALLOW_INSECURE=1` 明確略過）。
+- [x] `/api/tutor/admin/*` 套用 `require_api_key`（前端 `tutorFetch` 已會帶上 Console 設定的 API Key）。
 
 ## Step 2 — 安全：CORS 與 Docker 設定
 - [ ] CORS 由 `Any` 改為白名單（`CORS_ORIGINS`，預設 `http://localhost:5173`、`http://127.0.0.1:5173`）。

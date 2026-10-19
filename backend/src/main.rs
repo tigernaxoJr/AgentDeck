@@ -39,17 +39,29 @@ async fn main() {
     repo.spawn_event_sink(event_rx);
 
     // 4. 建立共享狀態與 Axum Router
-    let app_state = AppState::new(scheduler, repo.clone(), api_key);
+    let app_state = AppState::new(scheduler, repo.clone(), api_key.clone());
     let scheduler_ref = app_state.scheduler.clone();
     let app = create_router(app_state);
 
     // 5. 綁定連接埠並掛載 Graceful Shutdown 訊號監聽
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
-    let ip = host.parse::<std::net::IpAddr>().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    let ip = host
+        .parse::<std::net::IpAddr>()
+        .unwrap_or_else(|_| panic!("HOST 不是合法的 IP 位址: {host}"));
+    // CLI 以 --dangerously-skip-permissions 執行，對外曝露時必須設定 API Key
+    if !ip.is_loopback()
+        && api_key.is_empty()
+        && std::env::var("ANTIGRAVITY_ALLOW_INSECURE").as_deref() != Ok("1")
+    {
+        eprintln!(
+            "❌ [Security] HOST={host} 會對外曝露服務，請設定 ANTIGRAVITY_API_KEY（或明確設定 ANTIGRAVITY_ALLOW_INSECURE=1）。"
+        );
+        std::process::exit(1);
+    }
     let addr = SocketAddr::from((ip, port));
     println!("🚀 Antigravity Web-CLI Bridge 啟動於 http://{}", addr);
     println!("📂 允許的基準工作目錄: {:?}", base_workspace);

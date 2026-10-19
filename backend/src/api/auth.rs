@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;
 
-use crate::api::routes::AppState;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct WsAuthQuery {
@@ -17,14 +17,15 @@ pub struct WsAuthQuery {
 }
 
 /// Axum 驗證中介軟體：同時支援 Bearer Header (REST) 與 ?token= Query (WebSocket)
+/// State 為 API Key 本身，讓 Console 與 Tutor 的 router 都能共用此中介軟體。
 pub async fn require_api_key(
-    State(state): State<AppState>,
+    State(api_key): State<Arc<String>>,
     Query(query): Query<WsAuthQuery>,
     req: Request,
     next: Next,
 ) -> Response {
     // 若環境變數未設定 API Key (空字串)，則視為開發模式直接放行
-    if state.api_key.is_empty() {
+    if api_key.is_empty() {
         return next.run(req).await;
     }
 
@@ -40,7 +41,7 @@ pub async fn require_api_key(
     let provided_token = header_token.or(query.token.as_deref());
 
     match provided_token {
-        Some(token) if constant_time_eq(token.as_bytes(), state.api_key.as_bytes()) => {
+        Some(token) if constant_time_eq(token.as_bytes(), api_key.as_bytes()) => {
             next.run(req).await
         }
         _ => (
