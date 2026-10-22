@@ -7,7 +7,7 @@ use sqlx::{
     SqlitePool,
 };
 
-use crate::storage::migrate::{self, Migration};
+use console_core::storage::migrate::{self, Migration};
 
 /// tutor.db 的 schema 遷移；新增變更時只能往後追加，不可修改已發佈的檔案
 pub const MIGRATIONS: &[Migration] = &[

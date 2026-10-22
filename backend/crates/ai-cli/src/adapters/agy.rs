@@ -75,8 +75,8 @@ impl CliAdapter for AgyAdapter {
                     return StreamItem::Usage(parse_usage(usage_val));
                 }
             }
-        } else if event == Some("result") {
-            if let Some(res) = v.get("result") {
+        } else if event == Some("result")
+            && let Some(res) = v.get("result") {
                 if let Some(usage_val) = res.get("usage") {
                     // Could emit usage or final text
                     let final_txt = res.get("response").and_then(|r| r.as_str()).map(|s| s.to_string());
@@ -89,7 +89,6 @@ impl CliAdapter for AgyAdapter {
                     return StreamItem::FinalText(resp.to_string());
                 }
             }
-        }
 
         // Direct /usage fallback
         if let Some(usage_val) = v.get("usage") {

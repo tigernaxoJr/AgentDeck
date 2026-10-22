@@ -82,7 +82,7 @@ pub fn routes(state: TutorState, api_key: Arc<String>) -> Router {
         .merge(features::bank_enrich::routes())
         .route_layer(middleware::from_fn_with_state(
             api_key,
-            crate::api::auth::require_api_key,
+            console_core::api::auth::require_api_key,
         ));
 
     Router::new()

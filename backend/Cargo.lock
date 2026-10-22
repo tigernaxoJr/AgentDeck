@@ -135,6 +135,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "console-core",
  "dashmap",
  "serde",
  "serde_json",
@@ -224,6 +225,27 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "console-core"
+version = "0.1.0"
+dependencies = [
+ "ai-cli",
+ "axum",
+ "base64",
+ "chrono",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "subtle",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -11,7 +11,7 @@ use axum::{
 };
 use tokio::process::Command;
 use axum::http::HeaderValue;
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use crate::api::auth::require_api_key;
@@ -39,17 +39,9 @@ impl AppState {
     }
 }
 
-/// `tutor_router` 由 `main` 先行初始化後傳入，初始化失敗時服務不會啟動。
-pub fn create_router(state: AppState, tutor_router: Router) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(cors_origins())
-        .allow_methods(Any)
-        .allow_headers([
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::AUTHORIZATION,
-        ]);
-
-    let protected_api = Router::new()
+/// 建立 Console 專屬的 protected API Router
+pub fn create_console_router(state: AppState) -> Router {
+    Router::new()
         .route("/tasks", post(create_task_handler).get(list_tasks_handler))
         .route("/tasks/{id}", get(get_task_handler))
         .route("/tasks/{id}/cancel", delete(cancel_task_handler))
@@ -62,17 +54,13 @@ pub fn create_router(state: AppState, tutor_router: Router) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.api_key.clone(),
             require_api_key,
-        ));
-
-    Router::new()
-        .nest("/api/tutor", tutor_router)
-        .nest("/api", protected_api.with_state(state))
-        .layer(cors)
+        ))
+        .with_state(state)
 }
 
 /// 跨域白名單：前端預設同源存取，只有直連後端的開發情境才需要。
 /// `CORS_ORIGINS` 以逗號分隔，預設為 Vite dev server 的兩個位址。
-fn cors_origins() -> AllowOrigin {
+pub fn cors_origins() -> AllowOrigin {
     let raw = std::env::var("CORS_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".to_string());
     let origins: Vec<HeaderValue> = raw

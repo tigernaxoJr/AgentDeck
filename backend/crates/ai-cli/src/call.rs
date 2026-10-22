@@ -145,12 +145,11 @@ fn parse_json_from_str<T: DeserializeOwned>(s: &str) -> Result<T, serde_json::Er
         return Ok(val);
     }
     // Extract substring between first '{' and last '}'
-    if let (Some(start), Some(end)) = (s.find('{'), s.rfind('}')) {
-        if start < end {
+    if let (Some(start), Some(end)) = (s.find('{'), s.rfind('}'))
+        && start < end {
             let slice = &s[start..=end];
             return serde_json::from_str::<T>(slice);
         }
-    }
     serde_json::from_str::<T>(s)
 }
 

@@ -131,20 +131,16 @@ impl CliAdapter for GenericAdapter {
     fn parse_line(&self, line: &str) -> StreamItem {
         if self.config.line_mode == "ndjson" {
             if let Ok(val) = serde_json::from_str::<Value>(line) {
-                if let Some(ref ptr) = self.config.final_text_pointer {
-                    if let Some(target) = val.pointer(ptr) {
-                        if let Some(s) = target.as_str() {
+                if let Some(ref ptr) = self.config.final_text_pointer
+                    && let Some(target) = val.pointer(ptr)
+                        && let Some(s) = target.as_str() {
                             return StreamItem::FinalText(s.to_string());
                         }
-                    }
-                }
-                if let Some(ref ptr) = self.config.text_delta_pointer {
-                    if let Some(target) = val.pointer(ptr) {
-                        if let Some(s) = target.as_str() {
+                if let Some(ref ptr) = self.config.text_delta_pointer
+                    && let Some(target) = val.pointer(ptr)
+                        && let Some(s) = target.as_str() {
                             return StreamItem::TextDelta(s.to_string());
                         }
-                    }
-                }
             }
             StreamItem::Ignore
         } else {

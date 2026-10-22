@@ -175,12 +175,11 @@ impl<A: CliAdapter> AiEngine for CliEngine<A> {
             }
         })?;
 
-        if let Some(stdin_content) = cmd_spec.stdin {
-            if let Some(mut stdin) = child.stdin.take() {
+        if let Some(stdin_content) = cmd_spec.stdin
+            && let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(stdin_content.as_bytes()).await;
                 let _ = stdin.flush().await;
             }
-        }
 
         let stdout = child.stdout.take().ok_or_else(|| AiError::Spawn("take stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| AiError::Spawn("take stderr".into()))?;
@@ -249,11 +248,10 @@ impl<A: CliAdapter> AiEngine for CliEngine<A> {
         let mut output_file_content = None;
         if let Some(ref expect_rel) = invocation.expect_output_file {
             let out_path = run_dir.join(expect_rel);
-            if out_path.exists() {
-                if let Ok(content) = tokio::fs::read_to_string(&out_path).await {
+            if out_path.exists()
+                && let Ok(content) = tokio::fs::read_to_string(&out_path).await {
                     output_file_content = Some(content);
                 }
-            }
         }
 
         let effective_final_text = final_text.or_else(|| {
@@ -266,14 +264,13 @@ impl<A: CliAdapter> AiEngine for CliEngine<A> {
         });
 
         if output_file_content.is_none() && effective_final_text.is_none() {
-            if let Some(status) = exit_status {
-                if !status.success() {
+            if let Some(status) = exit_status
+                && !status.success() {
                     return Err(AiError::NonZeroExit {
                         code: status.code(),
                         stderr_tail,
                     });
                 }
-            }
             return Err(AiError::EmptyOutput);
         }
 

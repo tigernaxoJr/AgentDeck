@@ -1,16 +1,18 @@
-mod api;
-mod executor;
-mod models;
-mod storage;
 pub mod tutor;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use api::routes::{create_router, AppState};
-use executor::scheduler::TaskScheduler;
-use storage::db::TaskRepository;
+use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
+use console_core::{
+    api::routes::cors_origins,
+    create_console_router,
+    AppState,
+    TaskRepository,
+    TaskScheduler,
+};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -56,7 +58,18 @@ async fn main() {
                 std::process::exit(1);
             }
         };
-    let app = create_router(app_state, tutor_router);
+    let cors = CorsLayer::new()
+        .allow_origin(cors_origins())
+        .allow_methods(Any)
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+        ]);
+
+    let app = Router::new()
+        .nest("/api/tutor", tutor_router)
+        .nest("/api", create_console_router(app_state))
+        .layer(cors);
 
     // 6. 綁定連接埠並掛載 Graceful Shutdown 訊號監聽
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());

@@ -30,17 +30,14 @@ pub struct Registry;
 impl Registry {
     pub fn build(cfg: &BackendConfig) -> Vec<Arc<dyn AiEngine>> {
         let mut generic_map: HashMap<String, GenericBackendToml> = HashMap::new();
-        if let Some(ref p) = cfg.toml_path {
-            if p.exists() {
-                if let Ok(content) = std::fs::read_to_string(p) {
-                    if let Ok(file_cfg) = toml::from_str::<BackendConfigFile>(&content) {
+        if let Some(ref p) = cfg.toml_path
+            && p.exists()
+                && let Ok(content) = std::fs::read_to_string(p)
+                    && let Ok(file_cfg) = toml::from_str::<BackendConfigFile>(&content) {
                         for b in file_cfg.backend {
                             generic_map.insert(b.id.clone(), b);
                         }
                     }
-                }
-            }
-        }
 
         let mut engines: Vec<Arc<dyn AiEngine>> = Vec::new();
 

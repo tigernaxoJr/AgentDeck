@@ -20,10 +20,10 @@ jobs:
         with:
           workspaces: backend
       - name: Clippy
-        run: cargo clippy --all-targets -p backend -p ai-cli -- -D warnings
+        run: cargo clippy --all-targets --workspace -- -D warnings
       - name: Test
         # 不呼叫真 CLI：AI 互動一律走 MockEngine
-        run: cargo test -p backend -p ai-cli
+        run: cargo test --workspace
 
   frontend:
     runs-on: ubuntu-latest

@@ -56,11 +56,10 @@ impl CliAdapter for ClaudeCodeAdapter {
 
         let typ = v.get("type").and_then(|t| t.as_str());
 
-        if typ == Some("result") {
-            if let Some(res) = v.get("result").and_then(|r| r.as_str()) {
+        if typ == Some("result")
+            && let Some(res) = v.get("result").and_then(|r| r.as_str()) {
                 return StreamItem::FinalText(res.to_string());
             }
-        }
 
         if let Some(usage_val) = v.get("usage") {
             return StreamItem::Usage(TokenUsage {
@@ -120,11 +119,10 @@ impl CliAdapter for GeminiCliAdapter {
     }
 
     fn parse_line(&self, line: &str) -> StreamItem {
-        if let Ok(v) = serde_json::from_str::<Value>(line) {
-            if let Some(resp) = v.get("response").and_then(|r| r.as_str()) {
+        if let Ok(v) = serde_json::from_str::<Value>(line)
+            && let Some(resp) = v.get("response").and_then(|r| r.as_str()) {
                 return StreamItem::FinalText(resp.to_string());
             }
-        }
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             StreamItem::TextDelta(format!("{}\n", line))
